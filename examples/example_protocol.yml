@@ -1,0 +1,177 @@
+# =============================================================================
+# example_protocol.yml
+# Mini protocolo de referencia — muestra los patrones que rompieron el bot:
+#   1) switch con compareTo: ../campo   (subir un nivel al padre real)
+#   2) array de containers con switch adentro (anon: true)
+#   3) tipo NOMBRADO parametrizable con $arg (como entityMetadataItem)
+#   4) container con bitfield empaquetado en 1 byte + switch por ese campo
+# =============================================================================
+
+types:
+  # ---- tipos base, siempre hay que declararlos así ----
+  varint: native
+  u8: native
+  i8: native
+  i16: native
+  i32: native
+  f32: native
+  bool: native
+  UUID: native
+  container: native
+  switch: native
+  array: native
+  bitfield: native
+  option: native
+  void: native
+
+  string:
+    pstring:
+      countType: varint
+
+  # ---------------------------------------------------------------------
+  # PATRÓN 1: tipo nombrado PARAMETRIZABLE con $arg
+  # ---------------------------------------------------------------------
+  # Se define UNA vez con un placeholder "$compareTo" (el nombre después
+  # del $ es arbitrario, vos elegís cómo llamarlo).
+  # Quien lo USE más abajo decide el valor real de compareTo en ese punto.
+  # Esto es EXACTAMENTE cómo minecraft-data define entityMetadataItem.
+  itemPorTipo:
+    switch:
+      compareTo: $compareTo     # <- placeholder, se sustituye al usarlo
+      fields:
+        '0': i8
+        '1': i16
+        '2': i32
+        '3': f32
+        '4': string
+        '5':
+          container:
+          - name: x
+            type: i32
+          - name: y
+            type: i32
+          - name: z
+            type: i32
+
+  # ---------------------------------------------------------------------
+  # PATRÓN 4: entrada con bitfield empaquetado en 1 byte + switch
+  # ---------------------------------------------------------------------
+  # Un solo byte trae DOS campos empaquetados (tipo de dato + índice).
+  # El container los separa con bitfield, y el switch usa el campo `tipo`
+  # (que vive en el MISMO container, leído recién arriba) para decidir el
+  # tipo del campo `valor` — invocando itemPorTipo con su $compareTo real.
+  entradaMetadata:
+    container:
+    - anon: true              # sus sub-campos (tipo, indice) se mezclan
+      type:                   # directo en el container padre, no anidan
+        bitfield:              # un dict nuevo
+        - name: tipo
+          size: 3
+          signed: false
+        - name: indice
+          size: 5
+          signed: false
+    - name: valor
+      type:
+      - itemPorTipo            # <- tipo nombrado parametrizable
+      - compareTo: tipo        # <- acá se resuelve el $compareTo = "tipo"
+
+  # ---------------------------------------------------------------------
+  # PATRÓN 2: array de containers, con un switch adentro que necesita
+  # mirar un campo del container PADRE del array (no del item)
+  # ---------------------------------------------------------------------
+  entradaJugador:
+    container:
+    - name: uuid
+      type: UUID
+    - anon: true
+      type:
+        switch:
+          # ../accion sube UN nivel: sale de este container-item (que
+          # solo tiene `uuid`) y llega al container que contiene el
+          # array (packet_ejemplo_jugadores, más abajo), donde SÍ existe
+          # el campo `accion`.
+          #
+          # OJO: esto solo funciona si entradaJugador se usa INLINE como
+          # item_type de un array (ver más abajo, "type: container: ...")
+          # y NO como tipo nombrado aparte -- un tipo nombrado (como este
+          # mismo bloque, definido con nombre "entradaJugador") SIEMPRE
+          # empuja su propio nivel de "..", así que si lo referenciás por
+          # nombre (type: entradaJugador) el ../accion de acá adentro NO
+          # llega a accion, porque el nivel que salta cae en ESTE mismo
+          # container, no en el padre real. Por eso packet_ejemplo_jugadores
+          # más abajo declara el container INLINE en vez de referenciar
+          # este tipo por nombre. Dejamos este bloque solo como referencia
+          # de la forma, no se usa directo.
+          compareTo: ../accion
+          fields:
+            agregar:
+              container:
+              - name: nombre
+                type: string
+            quitar: void
+
+  packet_ejemplo_jugadores:
+    container:
+    - name: accion
+      type:
+        mapper:
+          type: varint
+          mappings:
+            '0': agregar
+            '1': quitar
+    - name: jugadores
+      type:
+        array:
+          countType: varint
+          type:
+            # INLINE, no "type: entradaJugador" -- así el array-item no
+            # empuja nivel propio y ../accion llega al container de arriba.
+            container:
+            - name: uuid
+              type: UUID
+            - anon: true
+              type:
+                switch:
+                  compareTo: ../accion
+                  fields:
+                    agregar:
+                      container:
+                      - name: nombre
+                        type: string
+                    quitar: void
+
+  # ejemplo de paquete "metadata de entidad" usando el patrón 1+4 juntos
+  packet_ejemplo_metadata:
+    container:
+    - name: entityId
+      type: varint
+    - name: metadata
+      type:
+        array:
+          countType: varint
+          type: entradaMetadata
+
+# =============================================================================
+# Estados/direcciones — protodef siempre necesita un scope (state.direction)
+# para saber qué tipos usar en cada fase de la conexión.
+# =============================================================================
+play:
+  toClient:
+    types:
+      packet:
+        container:
+        - name: name
+          type:
+            mapper:
+              type: varint
+              mappings:
+                '0x00': ejemplo_jugadores
+                '0x01': ejemplo_metadata
+        - name: params
+          type:
+            switch:
+              compareTo: name
+              fields:
+                ejemplo_jugadores: packet_ejemplo_jugadores
+                ejemplo_metadata: packet_ejemplo_metadata

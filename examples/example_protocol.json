@@ -1,0 +1,229 @@
+{
+  "types": {
+    "varint": "native",
+    "u8": "native",
+    "i8": "native",
+    "i16": "native",
+    "i32": "native",
+    "f32": "native",
+    "bool": "native",
+    "UUID": "native",
+    "container": "native",
+    "switch": "native",
+    "array": "native",
+    "bitfield": "native",
+    "option": "native",
+    "void": "native",
+    "string": [
+      "pstring",
+      {
+        "countType": "varint"
+      }
+    ],
+    "itemPorTipo": [
+      "switch",
+      {
+        "compareTo": "$compareTo",
+        "fields": {
+          "0": "i8",
+          "1": "i16",
+          "2": "i32",
+          "3": "f32",
+          "4": "string",
+          "5": [
+            "container",
+            [
+              {
+                "name": "x",
+                "type": "i32"
+              },
+              {
+                "name": "y",
+                "type": "i32"
+              },
+              {
+                "name": "z",
+                "type": "i32"
+              }
+            ]
+          ]
+        }
+      }
+    ],
+    "entradaMetadata": [
+      "container",
+      [
+        {
+          "anon": true,
+          "type": [
+            "bitfield",
+            [
+              {
+                "name": "tipo",
+                "size": 3,
+                "signed": false
+              },
+              {
+                "name": "indice",
+                "size": 5,
+                "signed": false
+              }
+            ]
+          ]
+        },
+        {
+          "name": "valor",
+          "type": [
+            "itemPorTipo",
+            {
+              "compareTo": "tipo"
+            }
+          ]
+        }
+      ]
+    ],
+    "entradaJugador": [
+      "container",
+      [
+        {
+          "name": "uuid",
+          "type": "UUID"
+        },
+        {
+          "anon": true,
+          "type": [
+            "switch",
+            {
+              "compareTo": "../accion",
+              "fields": {
+                "agregar": [
+                  "container",
+                  [
+                    {
+                      "name": "nombre",
+                      "type": "string"
+                    }
+                  ]
+                ],
+                "quitar": "void"
+              }
+            }
+          ]
+        }
+      ]
+    ],
+    "packet_ejemplo_jugadores": [
+      "container",
+      [
+        {
+          "name": "accion",
+          "type": [
+            "mapper",
+            {
+              "type": "varint",
+              "mappings": {
+                "0": "agregar",
+                "1": "quitar"
+              }
+            }
+          ]
+        },
+        {
+          "name": "jugadores",
+          "type": [
+            "array",
+            {
+              "countType": "varint",
+              "type": [
+                "container",
+                [
+                  {
+                    "name": "uuid",
+                    "type": "UUID"
+                  },
+                  {
+                    "anon": true,
+                    "type": [
+                      "switch",
+                      {
+                        "compareTo": "../accion",
+                        "fields": {
+                          "agregar": [
+                            "container",
+                            [
+                              {
+                                "name": "nombre",
+                                "type": "string"
+                              }
+                            ]
+                          ],
+                          "quitar": "void"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    ],
+    "packet_ejemplo_metadata": [
+      "container",
+      [
+        {
+          "name": "entityId",
+          "type": "varint"
+        },
+        {
+          "name": "metadata",
+          "type": [
+            "array",
+            {
+              "countType": "varint",
+              "type": "entradaMetadata"
+            }
+          ]
+        }
+      ]
+    ]
+  },
+  "play": {
+    "toClient": {
+      "types": {
+        "packet": [
+          "container",
+          [
+            {
+              "name": "name",
+              "type": [
+                "mapper",
+                {
+                  "type": "varint",
+                  "mappings": {
+                    "0x00": "ejemplo_jugadores",
+                    "0x01": "ejemplo_metadata"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "params",
+              "type": [
+                "switch",
+                {
+                  "compareTo": "name",
+                  "fields": {
+                    "ejemplo_jugadores": "packet_ejemplo_jugadores",
+                    "ejemplo_metadata": "packet_ejemplo_metadata"
+                  }
+                }
+              ]
+            }
+          ]
+        ]
+      }
+    }
+  }
+}
