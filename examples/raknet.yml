@@ -1,0 +1,340 @@
+# ============================================================================
+# raknet.yml -- "raknet-data"
+# ============================================================================
+# Definicion declarativa de RakNet 6 (la version que usa MCPE moderno, mismo
+# handshake que protocolo 84) para protolib. Standalone: no depende de
+# raklib-py ni de ningun proyecto puntual (DumpDroid, etc), pensado para
+# reusarse en cualquier server/cliente RakNet propio.
+#
+# Cubre:
+#   - magic (16 bytes fijos que identifican paquetes offline RakNet)
+#   - address (variant IPv4 / IPv6)
+#   - offline handshake: UNCONNECTED_PING/PONG, OPEN_CONNECTION_REQUEST/REPLY 1 y 2
+#   - datagram header (bitflags: valid / ACK / NAK / packet-pair / continuous-send / needs-b-and-as)
+#   - ACK / NAK (rangos de sequence number, single o range)
+#   - online handshake (ya encapsulado en un datagrama, packet id 0x83):
+#       CONNECTED_PING, CONNECTED_PONG, CONNECTION_REQUEST,
+#       CONNECTION_REQUEST_ACCEPTED, NEW_INCOMING_CONNECTION,
+#       DISCONNECTION_NOTIFICATION
+#
+# NO cubre (queda para capa superior / framer propio): reensamblado de
+# fragmentos (split packet), reliability layer completa (ordering channels),
+# eso vive mejor en codigo Python explicito, no como "dato" declarativo.
+# ============================================================================
+
+types:
+
+  # -- magic: 16 bytes fijos, siempre el mismo valor en TODO paquete offline.
+  # RakNet no lo trata como "constante a validar" a nivel de tipo -- eso lo
+  # valida quien lea el paquete -- aca solo se define el framing (16 bytes).
+  # NOTA: no se usa el shorthand `buffer:\n  count: 16` porque 'count' es a
+  # la vez un nombre de opcion de buffer Y un tipo compuesto reconocido por
+  # el loader (COMPOSITE_TYPE_NAMES) -- el traductor lo confunde con un
+  # shorthand anidado y devuelve ["buffer", ["count", 16]] en vez de
+  # ["buffer", {"count": 16}]. Se usa la forma explicita para evitarlo.
+  magic: ["buffer", {"count": 16}]
+
+  # -- direccion RakNet: variant segun version (4 = IPv4, 6 = IPv6).
+  # Server y cliente casi siempre usan IPv4 en MCPE; se deja IPv6 definido
+  # por completitud del dataset.
+  raknet_address:
+    container:
+      - name: version
+        type: u8
+      - name: address
+        type:
+          switch:
+            compareTo: version
+            fields:
+              4: raknet_address_ipv4
+              6: raknet_address_ipv6
+
+  raknet_address_ipv4:
+    container:
+      # ip guardada como 4 bytes crudos (cada byte YA viene invertido con
+      # ~byte en la implementacion real de RakNet; eso es logica de
+      # lectura/escritura de mas alto nivel, no del dato en si)
+      - name: ip
+        type: ["buffer", {"count": 4}]
+      - name: port
+        type: u16
+
+  raknet_address_ipv6:
+    container:
+      - name: family
+        type: li16
+      - name: port
+        type: u16
+      - name: flowInfo
+        type: u32
+      - name: ip
+        type: ["buffer", {"count": 16}]
+      - name: scopeId
+        type: u32
+
+  # -- datagram header: 1 byte de flags antes del contenido de cada datagrama.
+  # bit7 = valid (siempre 1 en datagramas reales)
+  # bit6 = ACK   (si es un paquete de ACK puro)
+  # bit5 = NAK   (si es un paquete de NAK puro)
+  # bit4 = packetPair
+  # bit3 = continuousSend
+  # bit2 = needsBAndAs
+  datagram_header:
+    bitflags:
+      type: u8
+      big: true
+      flags:
+        - needsBAndAs
+        - continuousSend
+        - packetPair
+        - NAK
+        - ACK
+        - null
+        - null
+        - valid
+
+  # -- rango de sequence numbers para ACK/NAK. RakNet soporte "single"
+  # (min == max, se manda un solo u24) o "range" (min y max distintos).
+  ack_range:
+    container:
+      - name: isSingle
+        type: u8
+      - name: min
+        type: lu24
+      - name: max
+        type:
+          switch:
+            compareTo: isSingle
+            fields:
+              0: lu24
+            default: void
+
+  ack_record_count:
+    type: li16
+
+  # -- header de "encapsulated packet": precede a cada mensaje online dentro
+  # de un datagrama. reliableMessageNumber / sequencingIndex / orderingIndex /
+  # orderingChannel se leen CONDICIONALMENTE segun 'reliability' -- eso no
+  # queda modelado aca como dato estatico (depende de logica de reliability,
+  # no de un layout fijo), se resuelve en el framer propio (codigo Python).
+  encapsulated_header:
+    container:
+      - name: flags
+        type:
+          bitfield:
+            - name: reliability
+              size: 3
+            - name: hasSplit
+              size: 1
+            - name: padding
+              size: 4
+      - name: length
+        type: u16   # en bits, no bytes -- paridad con RakNet real (>> 3 al usar)
+
+# ============================================================================
+# Paquetes OFFLINE (antes de handshake completo, sin datagram header)
+# Cada uno arranca con 1 byte de message ID.
+# ============================================================================
+
+offline:
+  toClient:
+    types:
+      packet:
+        container:
+          - name: name
+            type:
+              mapper:
+                type: u8
+                mappings:
+                  '0x1c': unconnected_pong
+                  '0x06': open_connection_reply_1
+                  '0x08': open_connection_reply_2
+          - name: params
+            type:
+              switch:
+                compareTo: name
+                fields:
+                  unconnected_pong: unconnected_pong
+                  open_connection_reply_1: open_connection_reply_1
+                  open_connection_reply_2: open_connection_reply_2
+
+      unconnected_pong:
+        container:
+          - name: pingId
+            type: u64
+          - name: serverGuid
+            type: u64
+          - name: magic
+            type: magic
+          - name: serverName
+            type:
+              pstring:
+                countType: u16
+
+      open_connection_reply_1:
+        container:
+          - name: magic
+            type: magic
+          - name: serverGuid
+            type: u64
+          - name: useSecurity
+            type: u8
+          - name: mtuSize
+            type: u16
+
+      open_connection_reply_2:
+        container:
+          - name: magic
+            type: magic
+          - name: serverGuid
+            type: u64
+          - name: clientAddress
+            type: raknet_address
+          - name: mtuSize
+            type: u16
+          - name: encryptionEnabled
+            type: u8
+
+  toServer:
+    types:
+      packet:
+        container:
+          - name: name
+            type:
+              mapper:
+                type: u8
+                mappings:
+                  '0x01': unconnected_ping
+                  '0x02': unconnected_ping   # unconnected_ping_open_connections, mismo layout
+                  '0x05': open_connection_request_1
+                  '0x07': open_connection_request_2
+          - name: params
+            type:
+              switch:
+                compareTo: name
+                fields:
+                  unconnected_ping: unconnected_ping
+                  open_connection_request_1: open_connection_request_1
+                  open_connection_request_2: open_connection_request_2
+
+      unconnected_ping:
+        container:
+          - name: pingId
+            type: u64
+          - name: magic
+            type: magic
+          - name: clientGuid
+            type: u64
+
+      open_connection_request_1:
+        container:
+          - name: magic
+            type: magic
+          - name: raknetProtocol
+            type: u8
+          - name: mtuPadding
+            type: ["buffer", {"rest": true}]
+
+      open_connection_request_2:
+        container:
+          - name: magic
+            type: magic
+          - name: serverAddress
+            type: raknet_address
+          - name: mtuSize
+            type: u16
+          - name: clientGuid
+            type: u64
+
+# ============================================================================
+# Paquetes ONLINE -- viajan DENTRO de un datagrama (encapsulated packet,
+# packet id fijo 0x83 dentro del frame), ya con conexion medio establecida.
+# El framing de "encapsulated packet" (reliability/order/split info) se deja
+# aparte en types.encapsulated_header para no mezclar la reliability layer
+# con el payload de cada mensaje online.
+# ============================================================================
+
+online:
+  toClient:
+    types: &online_types
+      packet:
+        container:
+          - name: name
+            type:
+              mapper:
+                type: u8
+                mappings:
+                  '0x00': connected_ping
+                  '0x03': connected_pong
+                  '0x09': connection_request
+                  '0x10': connection_request_accepted
+                  '0x13': new_incoming_connection
+                  '0x15': disconnection_notification
+          - name: params
+            type:
+              switch:
+                compareTo: name
+                fields:
+                  connected_ping: connected_ping
+                  connected_pong: connected_pong
+                  connection_request: connection_request
+                  connection_request_accepted: connection_request_accepted
+                  new_incoming_connection: new_incoming_connection
+                  disconnection_notification: disconnection_notification
+
+      connected_ping:
+        container:
+          - name: pingId
+            type: u64
+
+      connected_pong:
+        container:
+          - name: pingId
+            type: u64
+          - name: pongId
+            type: u64
+
+      connection_request:
+        container:
+          - name: clientGuid
+            type: u64
+          - name: timestamp
+            type: u64
+          - name: useSecurity
+            type: u8
+
+      connection_request_accepted:
+        container:
+          - name: clientAddress
+            type: raknet_address
+          - name: systemIndex
+            type: u16
+          - name: internalIds
+            type:
+              array:
+                count: 10
+                type: raknet_address
+          - name: requestTimestamp
+            type: u64
+          - name: acceptedTimestamp
+            type: u64
+
+      new_incoming_connection:
+        container:
+          - name: serverAddress
+            type: raknet_address
+          - name: internalIds
+            type:
+              array:
+                count: 10
+                type: raknet_address
+          - name: pingTimestamp
+            type: u64
+          - name: pongTimestamp
+            type: u64
+
+      disconnection_notification:
+        container: []
+
+  toServer:
+    types: *online_types

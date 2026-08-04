@@ -1,0 +1,1283 @@
+# =============================================================================
+# pocketnet_protocol.yml
+# Protocolo COMPLETO de PocketNet (Minecraft Classic 0.30 + CPE) migrado a
+# un solo archivo declarativo, leído por protodef 0.2.0.
+#
+# Migrado 1:1 desde los 55 archivos de src/network/protocol/*.py -- cada
+# encode()/decode() se tradujo campo por campo, sin inventar ni reordenar
+# nada. Fuente de verdad original: NetReader/NetWriter (network/buffer.py).
+#
+# Notas de fidelidad:
+#   - write_string()/read_string()  -> string64 (CP437, 64 bytes, padded)
+#   - write_fpos()/read_fpos()      -> fixedCoord (i16, valor*32)
+#   - write_byte_array()/read_byte_array() (1024) -> buffer1024
+#   - Paquetes con lógica extra en Python (DefineBlock*, DefineModel*,
+#     DefineEffect) se migraron con la MISMA codificación de bits/escalas
+#     que tenían sus funciones _raw_speed/_brightness_byte/_flags -- ver
+#     comentarios en cada uno.
+# =============================================================================
+
+types:
+  # --- nativos base ---
+  u8: native
+  i8: native
+  u16: native
+  i16: native
+  u32: native
+  i32: native
+  f32: native
+  bool: native
+  void: native
+  container: native
+  array: native
+  switch: native
+  bitfield: native
+  option: native
+
+  # --- primitivos propios de Minecraft Classic (ya en primitives.py) ---
+  string64: native        # CP437, 64 bytes, padded con espacio
+  buffer1024: native      # chunk de nivel, 1024 bytes fijos
+  buffer64: native         # PluginMessage data, 64 bytes fijos con padding \x00
+  fixedCoord: native       # coordenada fixed-point Q10.5 (i16, valor*32)
+  fixedCoordDelta: native  # delta comprimido (i8, valor*32)
+
+  # ---------------------------------------------------------------------
+  # 0x00 Identification (toServer y toClient comparten formato)
+  # ---------------------------------------------------------------------
+  packet_identification:
+    container:
+    - name: protocolVersion
+      type: u8
+    - name: username
+      type: string64
+    - name: verificationKey
+      type: string64
+    - name: userType
+      type: u8
+
+  # ---------------------------------------------------------------------
+  # 0x01 Ping -- sin cuerpo
+  # ---------------------------------------------------------------------
+  packet_ping:
+    container: []
+
+  # ---------------------------------------------------------------------
+  # 0x02/0x03/0x04 Level Init / Data Chunk / Finalize (toClient)
+  # ---------------------------------------------------------------------
+  packet_level_initialize:
+    container: []
+
+  packet_level_data_chunk:
+    container:
+    - name: chunkLength
+      type: u16
+    - name: chunkData
+      type: buffer1024
+    - name: percentComplete
+      type: u8
+
+  packet_level_finalize:
+    container:
+    - name: sizeX
+      type: u16
+    - name: sizeY
+      type: u16
+    - name: sizeZ
+      type: u16
+
+  # ---------------------------------------------------------------------
+  # 0x05 Set Block Client (toServer) / 0x06 Set Block Server (toClient)
+  # ---------------------------------------------------------------------
+  packet_set_block_client:
+    container:
+    - name: x
+      type: i16
+    - name: y
+      type: i16
+    - name: z
+      type: i16
+    - name: mode
+      type: u8
+    - name: blockType
+      type: u8
+
+  packet_set_block_server:
+    container:
+    - name: x
+      type: i16
+    - name: y
+      type: i16
+    - name: z
+      type: i16
+    - name: blockType
+      type: u8
+
+  # ---------------------------------------------------------------------
+  # 0x07 Spawn Player
+  # ---------------------------------------------------------------------
+  packet_spawn_player:
+    container:
+    - name: playerId
+      type: i8
+    - name: name
+      type: string64
+    - name: x
+      type: fixedCoord
+    - name: y
+      type: fixedCoord
+    - name: z
+      type: fixedCoord
+    - name: yaw
+      type: u8
+    - name: pitch
+      type: u8
+
+  # ---------------------------------------------------------------------
+  # 0x08 Player Teleport (posición absoluta)
+  # ---------------------------------------------------------------------
+  packet_player_teleport:
+    container:
+    - name: playerId
+      type: i8
+    - name: x
+      type: fixedCoord
+    - name: y
+      type: fixedCoord
+    - name: z
+      type: fixedCoord
+    - name: yaw
+      type: u8
+    - name: pitch
+      type: u8
+
+  # ---------------------------------------------------------------------
+  # 0x09 Position + Orientation Update (delta relativo comprimido)
+  # ---------------------------------------------------------------------
+  packet_position_orientation_update:
+    container:
+    - name: playerId
+      type: i8
+    - name: dx
+      type: fixedCoordDelta
+    - name: dy
+      type: fixedCoordDelta
+    - name: dz
+      type: fixedCoordDelta
+    - name: yaw
+      type: u8
+    - name: pitch
+      type: u8
+
+  # ---------------------------------------------------------------------
+  # 0x0A Position Update (delta relativo, sin orientación)
+  # ---------------------------------------------------------------------
+  packet_position_update:
+    container:
+    - name: playerId
+      type: i8
+    - name: dx
+      type: fixedCoordDelta
+    - name: dy
+      type: fixedCoordDelta
+    - name: dz
+      type: fixedCoordDelta
+
+  # ---------------------------------------------------------------------
+  # 0x0B Orientation Update
+  # ---------------------------------------------------------------------
+  packet_orientation_update:
+    container:
+    - name: playerId
+      type: i8
+    - name: yaw
+      type: u8
+    - name: pitch
+      type: u8
+
+  # ---------------------------------------------------------------------
+  # 0x0C Despawn Player
+  # ---------------------------------------------------------------------
+  packet_despawn_player:
+    container:
+    - name: playerId
+      type: i8
+
+  # ---------------------------------------------------------------------
+  # 0x0D Message (ambas direcciones)
+  # ---------------------------------------------------------------------
+  packet_message:
+    container:
+    - name: playerId
+      type: i8
+    - name: message
+      type: string64
+
+  # ---------------------------------------------------------------------
+  # 0x0E Disconnect Player
+  # ---------------------------------------------------------------------
+  packet_disconnect_player:
+    container:
+    - name: reason
+      type: string64
+
+  # ---------------------------------------------------------------------
+  # 0x0F Update User Type
+  # ---------------------------------------------------------------------
+  packet_update_user_type:
+    container:
+    - name: userType
+      type: u8
+
+  # ---------------------------------------------------------------------
+  # 0x10 ExtInfo (CPE)
+  # ---------------------------------------------------------------------
+  packet_ext_info:
+    container:
+    - name: appName
+      type: string64
+    - name: extensionCount
+      type: i16
+
+  # ---------------------------------------------------------------------
+  # 0x11 ExtEntry (CPE)
+  # ---------------------------------------------------------------------
+  packet_ext_entry:
+    container:
+    - name: extName
+      type: string64
+    - name: version
+      type: i32
+
+  # ---------------------------------------------------------------------
+  # 0x12 ClickDistance (CPE)
+  # ---------------------------------------------------------------------
+  packet_click_distance:
+    container:
+    - name: distance
+      type: i16
+
+  # ---------------------------------------------------------------------
+  # 0x13 CustomBlockSupportLevel (CPE)
+  # ---------------------------------------------------------------------
+  packet_custom_block_support_level:
+    container:
+    - name: level
+      type: u8
+
+  # ---------------------------------------------------------------------
+  # 0x14 HoldThis (CPE HeldBlock)
+  # ---------------------------------------------------------------------
+  packet_hold_this:
+    container:
+    - name: blockType
+      type: u8
+    - name: preventChange
+      type: bool
+
+  # ---------------------------------------------------------------------
+  # 0x15 TextHotKey (CPE)
+  # ---------------------------------------------------------------------
+  packet_text_hot_key:
+    container:
+    - name: label
+      type: string64
+    - name: action
+      type: string64
+    - name: keycode
+      type: i32
+    - name: keyMods
+      type: u8
+
+  # ---------------------------------------------------------------------
+  # 0x16 ExtAddPlayerName (CPE ExtPlayerList)
+  # ---------------------------------------------------------------------
+  packet_ext_add_player_name:
+    container:
+    - name: nameId
+      type: i16
+    - name: playerName
+      type: string64
+    - name: listName
+      type: string64
+    - name: groupName
+      type: string64
+    - name: groupRank
+      type: u8
+
+  # ---------------------------------------------------------------------
+  # 0x18 ExtRemovePlayerName (CPE ExtPlayerList)
+  # ---------------------------------------------------------------------
+  packet_ext_remove_player_name:
+    container:
+    - name: nameId
+      type: i16
+
+  # ---------------------------------------------------------------------
+  # 0x19 EnvSetColor (CPE EnvColors)
+  # ---------------------------------------------------------------------
+  packet_env_set_color:
+    container:
+    - name: colorType
+      type: u8
+    - name: r
+      type: i16
+    - name: g
+      type: i16
+    - name: b
+      type: i16
+
+  # ---------------------------------------------------------------------
+  # 0x1A MakeSelection (CPE SelectionCuboid)
+  # ---------------------------------------------------------------------
+  packet_make_selection:
+    container:
+    - name: selectionId
+      type: u8
+    - name: label
+      type: string64
+    - name: startX
+      type: u16
+    - name: startY
+      type: u16
+    - name: startZ
+      type: u16
+    - name: endX
+      type: u16
+    - name: endY
+      type: u16
+    - name: endZ
+      type: u16
+    - name: r
+      type: i16
+    - name: g
+      type: i16
+    - name: b
+      type: i16
+    - name: opacity
+      type: i16
+
+  # ---------------------------------------------------------------------
+  # 0x1B RemoveSelection (CPE SelectionCuboid)
+  # ---------------------------------------------------------------------
+  packet_remove_selection:
+    container:
+    - name: selectionId
+      type: u8
+
+  # ---------------------------------------------------------------------
+  # 0x1C SetBlockPermission (CPE BlockPermissions)
+  # ---------------------------------------------------------------------
+  packet_set_block_permission:
+    container:
+    - name: blockType
+      type: u8
+    - name: canPlace
+      type: bool
+    - name: canDelete
+      type: bool
+
+  # ---------------------------------------------------------------------
+  # 0x1D ChangeModel (CPE)
+  # ---------------------------------------------------------------------
+  packet_change_model:
+    container:
+    - name: entityId
+      type: i8
+    - name: modelName
+      type: string64
+
+  # ---------------------------------------------------------------------
+  # 0x1E EnvSetMapAppearance (CPE EnvMapAppearance)
+  # version se resuelve afuera (quien arma el paquete decide v1/v2);
+  # acá se exponen las dos variantes con nombre propio.
+  # ---------------------------------------------------------------------
+  packet_env_set_map_appearance_v1:
+    container:
+    - name: textureUrl
+      type: string64
+    - name: sideBlock
+      type: u8
+    - name: edgeBlock
+      type: u8
+    - name: sideLevel
+      type: i16
+
+  packet_env_set_map_appearance_v2:
+    container:
+    - name: textureUrl
+      type: string64
+    - name: sideBlock
+      type: u8
+    - name: edgeBlock
+      type: u8
+    - name: sideLevel
+      type: i16
+    - name: cloudHeight
+      type: i16
+    - name: maxFogDistance
+      type: i16
+
+  # ---------------------------------------------------------------------
+  # 0x1F EnvWeatherType (CPE)
+  # ---------------------------------------------------------------------
+  packet_env_weather_type:
+    container:
+    - name: weatherType
+      type: u8
+
+  # ---------------------------------------------------------------------
+  # 0x20 HackControl (CPE)
+  # ---------------------------------------------------------------------
+  packet_hack_control:
+    container:
+    - name: canFly
+      type: bool
+    - name: canNoclip
+      type: bool
+    - name: canSpeed
+      type: bool
+    - name: canRespawn
+      type: bool
+    - name: canThirdPerson
+      type: bool
+    - name: jumpHeight
+      type: i16
+
+  # ---------------------------------------------------------------------
+  # 0x21 ExtAddEntity2 (CPE ExtEntityPositions)
+  # ---------------------------------------------------------------------
+  packet_ext_add_entity_2:
+    container:
+    - name: entityId
+      type: i8
+    - name: displayName
+      type: string64
+    - name: skinName
+      type: string64
+    - name: x
+      type: fixedCoord
+    - name: y
+      type: fixedCoord
+    - name: z
+      type: fixedCoord
+    - name: yaw
+      type: u8
+    - name: pitch
+      type: u8
+
+  # ---------------------------------------------------------------------
+  # 0x22 EntityTeleportExt (CPE ExtEntityPositions)
+  # flags empaquetados: bit0=usePos, bits1-2=moveMode, bit4=useOrientation,
+  # bit5=interpolateOrientation -- se codifica con bitfield en orden
+  # MSB->LSB tal como lo arma _flags() del original (que iba de bajo a
+  # alto, así que acá los bits se listan de mayor a menor para que el
+  # bitfield -- que llena de MSB a LSB -- produzca el mismo byte).
+  # ---------------------------------------------------------------------
+  packet_entity_teleport_ext:
+    container:
+    - name: entityId
+      type: i8
+    - name: flags
+      type:
+      - bitfield
+      - - name: reserved
+          size: 2
+          signed: false
+        - name: interpolateOrientation
+          size: 1
+          signed: false
+        - name: useOrientation
+          size: 1
+          signed: false
+        - name: reserved2
+          size: 1
+          signed: false
+        - name: moveMode
+          size: 2
+          signed: false
+        - name: usePos
+          size: 1
+          signed: false
+    - name: x
+      type: fixedCoord
+    - name: y
+      type: fixedCoord
+    - name: z
+      type: fixedCoord
+    - name: yaw
+      type: u8
+    - name: pitch
+      type: u8
+
+  # ---------------------------------------------------------------------
+  # 0x23 DefineBlock (CPE BlockDefinitions, shape simple)
+  # Variantes por extBlocks/extTexs quedan expuestas como tipos separados
+  # porque cambian el ANCHO de varios campos, no solo un flag de un bit.
+  # ---------------------------------------------------------------------
+  packet_define_block_u8block_u8tex:
+    container:
+    - name: blockId
+      type: u8
+    - name: name
+      type: string64
+    - name: collideType
+      type: u8
+    - name: speedRaw
+      type: u8
+    - name: topTex
+      type: u8
+    - name: sideTex
+      type: u8
+    - name: bottomTex
+      type: u8
+    - name: blocksLightInv
+      type: u8
+    - name: walkSound
+      type: u8
+    - name: brightnessByte
+      type: u8
+    - name: shape
+      type: u8
+    - name: blockDraw
+      type: u8
+    - name: fogDensity
+      type: u8
+    - name: fogR
+      type: u8
+    - name: fogG
+      type: u8
+    - name: fogB
+      type: u8
+
+  packet_define_block_u16block_u16tex:
+    container:
+    - name: blockId
+      type: u16
+    - name: name
+      type: string64
+    - name: collideType
+      type: u8
+    - name: speedRaw
+      type: u8
+    - name: topTex
+      type: u16
+    - name: sideTex
+      type: u16
+    - name: bottomTex
+      type: u16
+    - name: blocksLightInv
+      type: u8
+    - name: walkSound
+      type: u8
+    - name: brightnessByte
+      type: u8
+    - name: shape
+      type: u8
+    - name: blockDraw
+      type: u8
+    - name: fogDensity
+      type: u8
+    - name: fogR
+      type: u8
+    - name: fogG
+      type: u8
+    - name: fogB
+      type: u8
+
+  # ---------------------------------------------------------------------
+  # 0x24 UndefineBlock (CPE BlockDefinitions)
+  # ---------------------------------------------------------------------
+  packet_undefine_block_u8:
+    container:
+    - name: blockId
+      type: u8
+
+  packet_undefine_block_u16:
+    container:
+    - name: blockId
+      type: u16
+
+  # ---------------------------------------------------------------------
+  # 0x25 DefineBlockExt (CPE BlockDefinitionsExt, hitbox custom)
+  # Variante con textura de lado ÚNICA (unique_side_texs=False), u8 block/tex
+  # ---------------------------------------------------------------------
+  packet_define_block_ext_u8block_u8tex_1side:
+    container:
+    - name: blockId
+      type: u8
+    - name: name
+      type: string64
+    - name: collideType
+      type: u8
+    - name: speedRaw
+      type: u8
+    - name: topTex
+      type: u8
+    - name: rightTex
+      type: u8
+    - name: bottomTex
+      type: u8
+    - name: blocksLightInv
+      type: u8
+    - name: walkSound
+      type: u8
+    - name: brightnessByte
+      type: u8
+    - name: minX
+      type: u8
+    - name: minZ
+      type: u8
+    - name: minY
+      type: u8
+    - name: maxX
+      type: u8
+    - name: maxZ
+      type: u8
+    - name: maxY
+      type: u8
+    - name: blockDraw
+      type: u8
+    - name: fogDensity
+      type: u8
+    - name: fogR
+      type: u8
+    - name: fogG
+      type: u8
+    - name: fogB
+      type: u8
+
+  # Variante con 4 texturas de lado (unique_side_texs=True), u8 block/tex
+  packet_define_block_ext_u8block_u8tex_4side:
+    container:
+    - name: blockId
+      type: u8
+    - name: name
+      type: string64
+    - name: collideType
+      type: u8
+    - name: speedRaw
+      type: u8
+    - name: topTex
+      type: u8
+    - name: leftTex
+      type: u8
+    - name: rightTex
+      type: u8
+    - name: frontTex
+      type: u8
+    - name: backTex
+      type: u8
+    - name: bottomTex
+      type: u8
+    - name: blocksLightInv
+      type: u8
+    - name: walkSound
+      type: u8
+    - name: brightnessByte
+      type: u8
+    - name: minX
+      type: u8
+    - name: minZ
+      type: u8
+    - name: minY
+      type: u8
+    - name: maxX
+      type: u8
+    - name: maxZ
+      type: u8
+    - name: maxY
+      type: u8
+    - name: blockDraw
+      type: u8
+    - name: fogDensity
+      type: u8
+    - name: fogR
+      type: u8
+    - name: fogG
+      type: u8
+    - name: fogB
+      type: u8
+
+  # ---------------------------------------------------------------------
+  # 0x27 SetTextColor (CPE TextColors)
+  # ---------------------------------------------------------------------
+  packet_set_text_color:
+    container:
+    - name: r
+      type: u8
+    - name: g
+      type: u8
+    - name: b
+      type: u8
+    - name: a
+      type: u8
+    - name: code
+      type: u8
+
+  # ---------------------------------------------------------------------
+  # 0x28 EnvSetMapUrl (CPE EnvMapAspect)
+  # ---------------------------------------------------------------------
+  packet_env_set_map_url:
+    container:
+    - name: textureUrl
+      type: string64
+
+  # ---------------------------------------------------------------------
+  # 0x29 EnvSetMapProperty (CPE EnvMapAspect)
+  # ---------------------------------------------------------------------
+  packet_env_set_map_property:
+    container:
+    - name: propertyType
+      type: u8
+    - name: value
+      type: i32
+
+  # ---------------------------------------------------------------------
+  # 0x2A SetEntityProperty (CPE EntityProperty)
+  # ---------------------------------------------------------------------
+  packet_set_entity_property:
+    container:
+    - name: entityId
+      type: i8
+    - name: propertyType
+      type: u8
+    - name: value
+      type: i32
+
+  # ---------------------------------------------------------------------
+  # 0x2B TwoWayPing (CPE)
+  # ---------------------------------------------------------------------
+  packet_two_way_ping:
+    container:
+    - name: direction
+      type: u8
+    - name: pingId
+      type: u16
+
+  # ---------------------------------------------------------------------
+  # 0x2C SetInventoryOrder (CPE InventoryOrder)
+  # ---------------------------------------------------------------------
+  packet_set_inventory_order:
+    container:
+    - name: blockId
+      type: u8
+    - name: order
+      type: u8
+
+  # ---------------------------------------------------------------------
+  # 0x2D SetHotbar (CPE)
+  # ---------------------------------------------------------------------
+  packet_set_hotbar:
+    container:
+    - name: blockId
+      type: u8
+    - name: slot
+      type: u8
+
+  # ---------------------------------------------------------------------
+  # 0x2E SetSpawnpoint (CPE)
+  # ---------------------------------------------------------------------
+  packet_set_spawnpoint:
+    container:
+    - name: x
+      type: fixedCoord
+    - name: y
+      type: fixedCoord
+    - name: z
+      type: fixedCoord
+    - name: yaw
+      type: u8
+    - name: pitch
+      type: u8
+
+  # ---------------------------------------------------------------------
+  # 0x2F VelocityControl (CPE)
+  # ---------------------------------------------------------------------
+  packet_velocity_control:
+    container:
+    - name: x
+      type: i32       # valor real * 10000, ver encode() original
+    - name: y
+      type: i32
+    - name: z
+      type: i32
+    - name: xMode
+      type: u8
+    - name: yMode
+      type: u8
+    - name: zMode
+      type: u8
+
+  # ---------------------------------------------------------------------
+  # 0x33 DefineEffect (CPE ParticlesEffect)
+  # size_variation/speed/gravity/base_lifetime/lifetime_variation van
+  # *10000 como i32; spread va *32 como u16 (idéntico al original).
+  # flags: bit0=expireOnGround, bit1=collidesSolid, bit2=collidesLiquid,
+  # bit3=collidesLeaves.
+  # ---------------------------------------------------------------------
+  packet_define_effect:
+    container:
+    - name: effectId
+      type: u8
+    - name: u1
+      type: u8
+    - name: v1
+      type: u8
+    - name: u2
+      type: u8
+    - name: v2
+      type: u8
+    - name: tintR
+      type: u8
+    - name: tintG
+      type: u8
+    - name: tintB
+      type: u8
+    - name: frameCount
+      type: u8
+    - name: particleCount
+      type: u8
+    - name: size
+      type: u8
+    - name: sizeVariationRaw
+      type: i32
+    - name: spreadRaw
+      type: u16
+    - name: speedRaw
+      type: i32
+    - name: gravityRaw
+      type: i32
+    - name: baseLifetimeRaw
+      type: i32
+    - name: lifetimeVariationRaw
+      type: i32
+    - name: flags
+      type:
+      - bitfield
+      - - name: reserved
+          size: 4
+          signed: false
+        - name: collidesLeaves
+          size: 1
+          signed: false
+        - name: collidesLiquid
+          size: 1
+          signed: false
+        - name: collidesSolid
+          size: 1
+          signed: false
+        - name: expireOnGround
+          size: 1
+          signed: false
+    - name: fullBright
+      type: u8
+
+  # ---------------------------------------------------------------------
+  # 0x34 SpawnEffect (CPE ParticlesEffect) -- x/y/z y origin*  van *32 (i32)
+  # ---------------------------------------------------------------------
+  packet_spawn_effect:
+    container:
+    - name: effectId
+      type: u8
+    - name: xRaw
+      type: i32
+    - name: yRaw
+      type: i32
+    - name: zRaw
+      type: i32
+    - name: originXRaw
+      type: i32
+    - name: originYRaw
+      type: i32
+    - name: originZRaw
+      type: i32
+
+  # ---------------------------------------------------------------------
+  # 0x35 PluginMessage (CPE PluginMessages)
+  # ---------------------------------------------------------------------
+  packet_plugin_message:
+    container:
+    - name: channel
+      type: u8
+    - name: data
+      type: buffer64
+
+  # ---------------------------------------------------------------------
+  # 0x36 DefineModel (CPE CustomModels, cabecera)
+  # flags: bit0=bobbing, bit1=pushes, bit2=usesHumanSkin, bit3=calcHumanAnims
+  # ---------------------------------------------------------------------
+  vec3f:
+    container:
+    - name: x
+      type: f32
+    - name: y
+      type: f32
+    - name: z
+      type: f32
+
+  packet_define_model:
+    container:
+    - name: modelId
+      type: u8
+    - name: name
+      type: string64
+    - name: flags
+      type:
+      - bitfield
+      - - name: reserved
+          size: 4
+          signed: false
+        - name: calcHumanAnims
+          size: 1
+          signed: false
+        - name: usesHumanSkin
+          size: 1
+          signed: false
+        - name: pushes
+          size: 1
+          signed: false
+        - name: bobbing
+          size: 1
+          signed: false
+    - name: nameY
+      type: f32
+    - name: eyeY
+      type: f32
+    - name: collisionBounds
+      type: vec3f
+    - name: pickingBoundsMin
+      type: vec3f
+    - name: pickingBoundsMax
+      type: vec3f
+    - name: uScale
+      type: u16
+    - name: vScale
+      type: u16
+    - name: partCount
+      type: u8
+
+  # ---------------------------------------------------------------------
+  # 0x37 DefineModelPart v1 (CPE CustomModels, sin animaciones reales)
+  # ---------------------------------------------------------------------
+  model_uv_face:
+    container:
+    - name: u1
+      type: u16
+    - name: v1
+      type: u16
+    - name: u2
+      type: u16
+    - name: v2
+      type: u16
+
+  packet_define_model_part_v1:
+    container:
+    - name: modelId
+      type: u8
+    - name: minBounds
+      type: vec3f
+    - name: maxBounds
+      type: vec3f
+    - name: uv
+      type:
+      - array
+      - count: 6
+        type: model_uv_face
+    - name: rotationOrigin
+      type: vec3f
+    - name: rotation
+      type: vec3f
+    - name: animTypeIgnored
+      type: u8
+    - name: animValueIgnored
+      type: i32
+    - name: flags
+      type:
+      - bitfield
+      - - name: reserved
+          size: 6
+          signed: false
+        - name: firstPersonArm
+          size: 1
+          signed: false
+        - name: fullbright
+          size: 1
+          signed: false
+
+  # ---------------------------------------------------------------------
+  # 0x37 DefineModelPart v2 (CPE CustomModels, con 4 animaciones reales)
+  # cada anim: 1 byte packed (animType 6 bits bajos | axis 2 bits altos)
+  # + 4 floats (a, b, c, d)
+  # ---------------------------------------------------------------------
+  model_anim:
+    container:
+    - name: packed
+      type:
+      - bitfield
+      - - name: axis
+          size: 2
+          signed: false
+        - name: animType
+          size: 6
+          signed: false
+    - name: a
+      type: f32
+    - name: b
+      type: f32
+    - name: c
+      type: f32
+    - name: d
+      type: f32
+
+  packet_define_model_part_v2:
+    container:
+    - name: modelId
+      type: u8
+    - name: minBounds
+      type: vec3f
+    - name: maxBounds
+      type: vec3f
+    - name: uv
+      type:
+      - array
+      - count: 6
+        type: model_uv_face
+    - name: rotationOrigin
+      type: vec3f
+    - name: rotation
+      type: vec3f
+    - name: anims
+      type:
+      - array
+      - count: 4
+        type: model_anim
+    - name: flags
+      type:
+      - bitfield
+      - - name: reserved
+          size: 6
+          signed: false
+        - name: firstPersonArm
+          size: 1
+          signed: false
+        - name: fullbright
+          size: 1
+          signed: false
+
+  # ---------------------------------------------------------------------
+  # 0x38 UndefineModel (CPE CustomModels)
+  # ---------------------------------------------------------------------
+  packet_undefine_model:
+    container:
+    - name: modelId
+      type: u8
+
+  # ---------------------------------------------------------------------
+  # 0x39 SetLightingMode (CPE)
+  # ---------------------------------------------------------------------
+  packet_set_lighting_mode:
+    container:
+    - name: mode
+      type: u8
+    - name: locked
+      type: bool
+
+  # ---------------------------------------------------------------------
+  # 0x3A SetCinematicGui (CPE)
+  # ---------------------------------------------------------------------
+  packet_set_cinematic_gui:
+    container:
+    - name: hideCrosshair
+      type: bool
+    - name: hideHand
+      type: bool
+    - name: hideHotbar
+      type: bool
+    - name: r
+      type: u8
+    - name: g
+      type: u8
+    - name: b
+      type: u8
+    - name: opacity
+      type: u8
+    - name: barSize
+      type: u16
+
+# =============================================================================
+# Estados / direcciones. "play" es el único estado real del protocolo
+# Classic -- no hay handshake por estado como en 1.8+, se separa igual
+# que en classicube_protocol.yml por consistencia con el resto de tus
+# protocolos (mc189, etc).
+#
+# Patrón: 1er campo "name" lee el opcode (u8) y lo mapea a un nombre
+# simbólico (mapper). 2do campo "params" hace switch sobre ese nombre
+# para elegir el container correspondiente. Igual que classicube_protocol.yml.
+# =============================================================================
+play:
+  toServer:
+    types:
+      packet:
+        container:
+        - name: name
+          type:
+            mapper:
+              type: u8
+              mappings:
+                '0x00': identification
+                '0x01': ping
+                '0x05': set_block_client
+                '0x08': player_teleport
+                '0x0d': message
+                '0x10': ext_info
+                '0x11': ext_entry
+                '0x13': custom_block_support_level
+                '0x18': ext_remove_player_name
+                '0x27': set_text_color
+                '0x2a': set_entity_property
+                '0x2b': two_way_ping
+                '0x2c': set_inventory_order
+                '0x2d': set_hotbar
+                '0x34': spawn_effect
+                '0x35': plugin_message
+                '0x38': undefine_model
+                '0x39': set_lighting_mode
+                '0x3a': set_cinematic_gui
+        - name: params
+          type:
+            switch:
+              compareTo: name
+              fields:
+                identification: packet_identification
+                ping: packet_ping
+                set_block_client: packet_set_block_client
+                player_teleport: packet_player_teleport
+                message: packet_message
+                ext_info: packet_ext_info
+                ext_entry: packet_ext_entry
+                custom_block_support_level: packet_custom_block_support_level
+                ext_remove_player_name: packet_ext_remove_player_name
+                set_text_color: packet_set_text_color
+                set_entity_property: packet_set_entity_property
+                two_way_ping: packet_two_way_ping
+                set_inventory_order: packet_set_inventory_order
+                set_hotbar: packet_set_hotbar
+                spawn_effect: packet_spawn_effect
+                plugin_message: packet_plugin_message
+                undefine_model: packet_undefine_model
+                set_lighting_mode: packet_set_lighting_mode
+                set_cinematic_gui: packet_set_cinematic_gui
+
+  toClient:
+    types:
+      packet:
+        container:
+        - name: name
+          type:
+            mapper:
+              type: u8
+              mappings:
+                '0x00': identification
+                '0x01': ping
+                '0x02': level_initialize
+                '0x03': level_data_chunk
+                '0x04': level_finalize
+                '0x06': set_block_server
+                '0x07': spawn_player
+                '0x08': player_teleport
+                '0x09': position_orientation_update
+                '0x0a': position_update
+                '0x0b': orientation_update
+                '0x0c': despawn_player
+                '0x0d': message
+                '0x0e': disconnect_player
+                '0x0f': update_user_type
+                '0x10': ext_info
+                '0x11': ext_entry
+                '0x12': click_distance
+                '0x13': custom_block_support_level
+                '0x14': hold_this
+                '0x15': text_hot_key
+                '0x16': ext_add_player_name
+                '0x18': ext_remove_player_name
+                '0x19': env_set_color
+                '0x1a': make_selection
+                '0x1b': remove_selection
+                '0x1c': set_block_permission
+                '0x1d': change_model
+                '0x1f': env_weather_type
+                '0x20': hack_control
+                '0x21': ext_add_entity_2
+                '0x22': entity_teleport_ext
+                '0x24': undefine_block
+                '0x27': set_text_color
+                '0x28': env_set_map_url
+                '0x29': env_set_map_property
+                '0x2a': set_entity_property
+                '0x2b': two_way_ping
+                '0x2c': set_inventory_order
+                '0x2d': set_hotbar
+                '0x2e': set_spawnpoint
+                '0x2f': velocity_control
+                '0x33': define_effect
+                '0x34': spawn_effect
+                '0x35': plugin_message
+                '0x36': define_model
+                '0x38': undefine_model
+                '0x39': set_lighting_mode
+                '0x3a': set_cinematic_gui
+        - name: params
+          type:
+            switch:
+              compareTo: name
+              fields:
+                identification: packet_identification
+                ping: packet_ping
+                level_initialize: packet_level_initialize
+                level_data_chunk: packet_level_data_chunk
+                level_finalize: packet_level_finalize
+                set_block_server: packet_set_block_server
+                spawn_player: packet_spawn_player
+                player_teleport: packet_player_teleport
+                position_orientation_update: packet_position_orientation_update
+                position_update: packet_position_update
+                orientation_update: packet_orientation_update
+                despawn_player: packet_despawn_player
+                message: packet_message
+                disconnect_player: packet_disconnect_player
+                update_user_type: packet_update_user_type
+                ext_info: packet_ext_info
+                ext_entry: packet_ext_entry
+                click_distance: packet_click_distance
+                custom_block_support_level: packet_custom_block_support_level
+                hold_this: packet_hold_this
+                text_hot_key: packet_text_hot_key
+                ext_add_player_name: packet_ext_add_player_name
+                ext_remove_player_name: packet_ext_remove_player_name
+                env_set_color: packet_env_set_color
+                make_selection: packet_make_selection
+                remove_selection: packet_remove_selection
+                set_block_permission: packet_set_block_permission
+                change_model: packet_change_model
+                env_weather_type: packet_env_weather_type
+                hack_control: packet_hack_control
+                ext_add_entity_2: packet_ext_add_entity_2
+                entity_teleport_ext: packet_entity_teleport_ext
+                undefine_block: packet_undefine_block_u8
+                set_text_color: packet_set_text_color
+                env_set_map_url: packet_env_set_map_url
+                env_set_map_property: packet_env_set_map_property
+                set_entity_property: packet_set_entity_property
+                two_way_ping: packet_two_way_ping
+                set_inventory_order: packet_set_inventory_order
+                set_hotbar: packet_set_hotbar
+                set_spawnpoint: packet_set_spawnpoint
+                velocity_control: packet_velocity_control
+                define_effect: packet_define_effect
+                spawn_effect: packet_spawn_effect
+                plugin_message: packet_plugin_message
+                define_model: packet_define_model
+                undefine_model: packet_undefine_model
+                set_lighting_mode: packet_set_lighting_mode
+                set_cinematic_gui: packet_set_cinematic_gui
+

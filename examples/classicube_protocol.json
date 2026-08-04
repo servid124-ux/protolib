@@ -1,0 +1,506 @@
+{
+  "types": {
+    "u8": "native",
+    "i8": "native",
+    "i16": "native",
+    "bool": "native",
+    "container": "native",
+    "switch": "native",
+    "void": "native",
+    "buffer1024": "native",
+    "string64": "native",
+    "fixedCoord": "native",
+    "fixedCoordDelta": "native",
+    "packet_identification": [
+      "container",
+      [
+        {
+          "name": "protocolVersion",
+          "type": "u8"
+        },
+        {
+          "name": "name",
+          "type": "string64"
+        },
+        {
+          "name": "keyOrMotd",
+          "type": "string64"
+        },
+        {
+          "name": "userType",
+          "type": "u8"
+        }
+      ]
+    ],
+    "packet_ping": [
+      "container",
+      []
+    ],
+    "packet_level_initialize": [
+      "container",
+      []
+    ],
+    "packet_level_data_chunk": [
+      "container",
+      [
+        {
+          "name": "chunkLength",
+          "type": "i16"
+        },
+        {
+          "name": "chunkData",
+          "type": "buffer1024"
+        },
+        {
+          "name": "percentComplete",
+          "type": "u8"
+        }
+      ]
+    ],
+    "packet_level_finalize": [
+      "container",
+      [
+        {
+          "name": "sizeX",
+          "type": "i16"
+        },
+        {
+          "name": "sizeY",
+          "type": "i16"
+        },
+        {
+          "name": "sizeZ",
+          "type": "i16"
+        }
+      ]
+    ],
+    "packet_set_block_client": [
+      "container",
+      [
+        {
+          "name": "x",
+          "type": "i16"
+        },
+        {
+          "name": "y",
+          "type": "i16"
+        },
+        {
+          "name": "z",
+          "type": "i16"
+        },
+        {
+          "name": "mode",
+          "type": "u8"
+        },
+        {
+          "name": "blockType",
+          "type": "u8"
+        }
+      ]
+    ],
+    "packet_set_block_server": [
+      "container",
+      [
+        {
+          "name": "x",
+          "type": "i16"
+        },
+        {
+          "name": "y",
+          "type": "i16"
+        },
+        {
+          "name": "z",
+          "type": "i16"
+        },
+        {
+          "name": "blockType",
+          "type": "u8"
+        }
+      ]
+    ],
+    "packet_spawn_player": [
+      "container",
+      [
+        {
+          "name": "playerId",
+          "type": "i8"
+        },
+        {
+          "name": "playerName",
+          "type": "string64"
+        },
+        {
+          "name": "x",
+          "type": "fixedCoord"
+        },
+        {
+          "name": "y",
+          "type": "fixedCoord"
+        },
+        {
+          "name": "z",
+          "type": "fixedCoord"
+        },
+        {
+          "name": "yaw",
+          "type": "u8"
+        },
+        {
+          "name": "pitch",
+          "type": "u8"
+        }
+      ]
+    ],
+    "packet_position_orientation": [
+      "container",
+      [
+        {
+          "name": "playerId",
+          "type": "i8"
+        },
+        {
+          "name": "x",
+          "type": "fixedCoord"
+        },
+        {
+          "name": "y",
+          "type": "fixedCoord"
+        },
+        {
+          "name": "z",
+          "type": "fixedCoord"
+        },
+        {
+          "name": "yaw",
+          "type": "u8"
+        },
+        {
+          "name": "pitch",
+          "type": "u8"
+        }
+      ]
+    ],
+    "packet_position_update": [
+      "container",
+      [
+        {
+          "name": "playerId",
+          "type": "i8"
+        },
+        {
+          "name": "dx",
+          "type": "fixedCoordDelta"
+        },
+        {
+          "name": "dy",
+          "type": "fixedCoordDelta"
+        },
+        {
+          "name": "dz",
+          "type": "fixedCoordDelta"
+        },
+        {
+          "name": "yaw",
+          "type": "u8"
+        },
+        {
+          "name": "pitch",
+          "type": "u8"
+        }
+      ]
+    ],
+    "packet_position_update_only": [
+      "container",
+      [
+        {
+          "name": "playerId",
+          "type": "i8"
+        },
+        {
+          "name": "dx",
+          "type": "fixedCoordDelta"
+        },
+        {
+          "name": "dy",
+          "type": "fixedCoordDelta"
+        },
+        {
+          "name": "dz",
+          "type": "fixedCoordDelta"
+        }
+      ]
+    ],
+    "packet_orientation_update": [
+      "container",
+      [
+        {
+          "name": "playerId",
+          "type": "i8"
+        },
+        {
+          "name": "yaw",
+          "type": "u8"
+        },
+        {
+          "name": "pitch",
+          "type": "u8"
+        }
+      ]
+    ],
+    "packet_despawn_player": [
+      "container",
+      [
+        {
+          "name": "playerId",
+          "type": "i8"
+        }
+      ]
+    ],
+    "packet_message": [
+      "container",
+      [
+        {
+          "name": "playerId",
+          "type": "i8"
+        },
+        {
+          "name": "message",
+          "type": "string64"
+        }
+      ]
+    ],
+    "packet_disconnect": [
+      "container",
+      [
+        {
+          "name": "reason",
+          "type": "string64"
+        }
+      ]
+    ],
+    "packet_update_user_type": [
+      "container",
+      [
+        {
+          "name": "userType",
+          "type": "u8"
+        }
+      ]
+    ],
+    "packet_ext_info": [
+      "container",
+      [
+        {
+          "name": "appName",
+          "type": "string64"
+        },
+        {
+          "name": "extensionCount",
+          "type": "i16"
+        }
+      ]
+    ],
+    "packet_ext_entry": [
+      "container",
+      [
+        {
+          "name": "extName",
+          "type": "string64"
+        },
+        {
+          "name": "version",
+          "type": "i32"
+        }
+      ]
+    ],
+    "packet_ext_click_distance": [
+      "container",
+      [
+        {
+          "name": "distance",
+          "type": "i16"
+        }
+      ]
+    ],
+    "packet_custom_block_support_level": [
+      "container",
+      [
+        {
+          "name": "supportLevel",
+          "type": "u8"
+        }
+      ]
+    ],
+    "packet_held_block": [
+      "container",
+      [
+        {
+          "name": "blockToHold",
+          "type": "u8"
+        },
+        {
+          "name": "preventChange",
+          "type": "bool"
+        }
+      ]
+    ],
+    "packet_ext_add_player_name": [
+      "container",
+      [
+        {
+          "name": "nameId",
+          "type": "i16"
+        },
+        {
+          "name": "playerName",
+          "type": "string64"
+        },
+        {
+          "name": "listName",
+          "type": "string64"
+        },
+        {
+          "name": "groupName",
+          "type": "string64"
+        },
+        {
+          "name": "groupRank",
+          "type": "u8"
+        }
+      ]
+    ],
+    "packet_ext_remove_player_name": [
+      "container",
+      [
+        {
+          "name": "nameId",
+          "type": "i16"
+        }
+      ]
+    ]
+  },
+  "play": {
+    "toServer": {
+      "types": {
+        "packet": [
+          "container",
+          [
+            {
+              "name": "name",
+              "type": [
+                "mapper",
+                {
+                  "type": "u8",
+                  "mappings": {
+                    "0x00": "identification",
+                    "0x05": "set_block",
+                    "0x08": "position_orientation",
+                    "0x0d": "message",
+                    "0x10": "ext_info",
+                    "0x11": "ext_entry",
+                    "0x12": "custom_block_support_level"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "params",
+              "type": [
+                "switch",
+                {
+                  "compareTo": "name",
+                  "fields": {
+                    "identification": "packet_identification",
+                    "set_block": "packet_set_block_client",
+                    "position_orientation": "packet_position_orientation",
+                    "message": "packet_message",
+                    "ext_info": "packet_ext_info",
+                    "ext_entry": "packet_ext_entry",
+                    "custom_block_support_level": "packet_custom_block_support_level"
+                  }
+                }
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    "toClient": {
+      "types": {
+        "packet": [
+          "container",
+          [
+            {
+              "name": "name",
+              "type": [
+                "mapper",
+                {
+                  "type": "u8",
+                  "mappings": {
+                    "0x00": "identification",
+                    "0x01": "ping",
+                    "0x02": "level_initialize",
+                    "0x03": "level_data_chunk",
+                    "0x04": "level_finalize",
+                    "0x06": "set_block",
+                    "0x07": "spawn_player",
+                    "0x08": "position_orientation",
+                    "0x09": "position_update",
+                    "0x0a": "position_update_only",
+                    "0x0b": "orientation_update",
+                    "0x0c": "despawn_player",
+                    "0x0d": "message",
+                    "0x0e": "disconnect",
+                    "0x0f": "update_user_type",
+                    "0x10": "ext_info",
+                    "0x11": "ext_entry",
+                    "0x12": "custom_block_support_level",
+                    "0x14": "held_block",
+                    "0x16": "ext_add_player_name",
+                    "0x18": "ext_remove_player_name",
+                    "0x1c": "ext_click_distance"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "params",
+              "type": [
+                "switch",
+                {
+                  "compareTo": "name",
+                  "fields": {
+                    "identification": "packet_identification",
+                    "ping": "packet_ping",
+                    "level_initialize": "packet_level_initialize",
+                    "level_data_chunk": "packet_level_data_chunk",
+                    "level_finalize": "packet_level_finalize",
+                    "set_block": "packet_set_block_server",
+                    "spawn_player": "packet_spawn_player",
+                    "position_orientation": "packet_position_orientation",
+                    "position_update": "packet_position_update",
+                    "position_update_only": "packet_position_update_only",
+                    "orientation_update": "packet_orientation_update",
+                    "despawn_player": "packet_despawn_player",
+                    "message": "packet_message",
+                    "disconnect": "packet_disconnect",
+                    "update_user_type": "packet_update_user_type",
+                    "ext_info": "packet_ext_info",
+                    "ext_entry": "packet_ext_entry",
+                    "custom_block_support_level": "packet_custom_block_support_level",
+                    "held_block": "packet_held_block",
+                    "ext_add_player_name": "packet_ext_add_player_name",
+                    "ext_remove_player_name": "packet_ext_remove_player_name",
+                    "ext_click_distance": "packet_ext_click_distance"
+                  }
+                }
+              ]
+            }
+          ]
+        ]
+      }
+    }
+  }
+}
