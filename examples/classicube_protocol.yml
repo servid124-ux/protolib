@@ -1,0 +1,417 @@
+# =============================================================================
+# classicube_protocol.yml
+# Protocolo clásico de Minecraft Classic / ClassiCube (extensión "0x07",
+# el classicProtocolExtension original). Sin varints: todo tamaño fijo,
+# big-endian, strings de 64 bytes CP437 rellenados con espacio.
+#
+# No hay handshake por estado real como en 1.8 -- es un solo "state" de
+# juego, los paquetes se distinguen por el primer byte (packet id, u8).
+# Server y client tienen sets de paquetes DISTINTOS (direcciones toServer
+# / toClient), así que se separan igual que 1.8.
+# =============================================================================
+
+types:
+  u8: native
+  i8: native
+  i16: native
+  bool: native
+  container: native
+  switch: native
+  void: native
+  buffer1024: native      # chunk de nivel de tamaño fijo, ver primitives.py
+  string64: native        # string CP437 de 64 bytes padded, ver primitives.py
+  fixedCoord: native      # coordenada fixed-point Q10.5 (i16), ver primitives.py
+
+  # delta de posición comprimido (0x09/0x0a): mismo fixed-point *32, pero
+  # el server asume que el movimiento entre updates cabe en 1 byte con
+  # signo (-4 a +4 bloques aprox). Si el delta real no entra, hay que
+  # mandar 0x08 (posición absoluta) en su lugar -- eso lo decide quien
+  # arma el paquete, no esta libreria.
+  fixedCoordDelta: native
+
+  # ---------------------------------------------------------------------
+  # 0x00 Identification -- mismo layout para toServer y toClient, solo
+  # cambia qué lado lo manda primero. Se define una vez y se reusa.
+  # ---------------------------------------------------------------------
+  packet_identification:
+    container:
+    - name: protocolVersion
+      type: u8              # siempre 0x07
+    - name: name
+      type: string64         # username (toServer) / server name (toClient)
+    - name: keyOrMotd
+      type: string64         # verification key (toServer) / MOTD (toClient)
+    - name: userType
+      type: u8               # toServer: siempre 0x00 (padding).
+                              # toClient: 0x64 op / 0x00 normal (ver op flag)
+
+  # ---------------------------------------------------------------------
+  # 0x01 Ping -- sin payload en ninguna dirección
+  # ---------------------------------------------------------------------
+  packet_ping:
+    container: []
+
+  # ---------------------------------------------------------------------
+  # toClient: 0x02/0x03/0x04 Level Init/Data Chunk/Finalize
+  # ---------------------------------------------------------------------
+  packet_level_initialize:
+    container: []
+
+  packet_level_data_chunk:
+    container:
+    - name: chunkLength
+      type: i16
+    - name: chunkData
+      type: buffer1024        # siempre 1024 bytes, relleno con 0x00 si sobra
+    - name: percentComplete
+      type: u8
+
+  packet_level_finalize:
+    container:
+    - name: sizeX
+      type: i16
+    - name: sizeY
+      type: i16
+    - name: sizeZ
+      type: i16
+
+  # ---------------------------------------------------------------------
+  # toServer: 0x05 Set Block (el jugador rompe/pone bloque)
+  # toClient: 0x06 Set Block (el server confirma/corrige un bloque)
+  # Distintos campos -- OJO que ambos comparten id 0x05/0x06 pero difieren
+  # ---------------------------------------------------------------------
+  packet_set_block_client:
+    container:
+    - name: x
+      type: i16
+    - name: y
+      type: i16
+    - name: z
+      type: i16
+    - name: mode
+      type: u8               # 0x00 = romper (aire), 0x01 = poner
+    - name: blockType
+      type: u8
+
+  packet_set_block_server:
+    container:
+    - name: x
+      type: i16
+    - name: y
+      type: i16
+    - name: z
+      type: i16
+    - name: blockType
+      type: u8
+
+  # ---------------------------------------------------------------------
+  # toClient: 0x07 Spawn Player
+  # ---------------------------------------------------------------------
+  packet_spawn_player:
+    container:
+    - name: playerId
+      type: i8               # -1 = el propio jugador (self)
+    - name: playerName
+      type: string64
+    - name: x
+      type: fixedCoord
+    - name: y
+      type: fixedCoord
+    - name: z
+      type: fixedCoord
+    - name: yaw
+      type: u8               # 0-255 -> 0-360 grados
+    - name: pitch
+      type: u8
+
+  # ---------------------------------------------------------------------
+  # toServer/toClient: 0x08 Position/Orientation (jugador manda la suya,
+  # server la reenvía con playerId de a quién pertenece)
+  # ---------------------------------------------------------------------
+  packet_position_orientation:
+    container:
+    - name: playerId
+      type: i8               # toServer: siempre -1 (ignorado/self)
+    - name: x
+      type: fixedCoord
+    - name: y
+      type: fixedCoord
+    - name: z
+      type: fixedCoord
+    - name: yaw
+      type: u8
+    - name: pitch
+      type: u8
+
+  # ---------------------------------------------------------------------
+  # toClient: 0x09 Position/Orientation Update (delta comprimido en i8)
+  # ---------------------------------------------------------------------
+  packet_position_update:
+    container:
+    - name: playerId
+      type: i8
+    - name: dx
+      type: fixedCoordDelta
+    - name: dy
+      type: fixedCoordDelta
+    - name: dz
+      type: fixedCoordDelta
+    - name: yaw
+      type: u8
+    - name: pitch
+      type: u8
+
+  # ---------------------------------------------------------------------
+  # toClient: 0x0a Position Update (solo posición, sin orientación)
+  # ---------------------------------------------------------------------
+  packet_position_update_only:
+    container:
+    - name: playerId
+      type: i8
+    - name: dx
+      type: fixedCoordDelta
+    - name: dy
+      type: fixedCoordDelta
+    - name: dz
+      type: fixedCoordDelta
+
+  # ---------------------------------------------------------------------
+  # toClient: 0x0b Orientation Update (solo yaw/pitch)
+  # ---------------------------------------------------------------------
+  packet_orientation_update:
+    container:
+    - name: playerId
+      type: i8
+    - name: yaw
+      type: u8
+    - name: pitch
+      type: u8
+
+  # ---------------------------------------------------------------------
+  # toClient: 0x0c Despawn Player
+  # ---------------------------------------------------------------------
+  packet_despawn_player:
+    container:
+    - name: playerId
+      type: i8
+
+  # ---------------------------------------------------------------------
+  # toServer/toClient: 0x0d Message
+  # toServer: playerId siempre -1 (reservado, el server lo ignora)
+  # toClient: playerId identifica quién habla (o -1 = mensaje de server)
+  # ---------------------------------------------------------------------
+  packet_message:
+    container:
+    - name: playerId
+      type: i8
+    - name: message
+      type: string64
+
+  # ---------------------------------------------------------------------
+  # toClient: 0x0e Disconnect Player
+  # ---------------------------------------------------------------------
+  packet_disconnect:
+    container:
+    - name: reason
+      type: string64
+
+  # ---------------------------------------------------------------------
+  # toClient: 0x0f Update User Type (setea/quita el op flag del jugador
+  # ya conectado, sin tener que reenviar todo el Identification)
+  # ---------------------------------------------------------------------
+  packet_update_user_type:
+    container:
+    - name: userType
+      type: u8               # 0x64 = op, 0x00 = normal
+
+  # =========================================================================
+  # CPE (Classic Protocol Extension) -- misma direccion (ida y vuelta),
+  # mismo layout toServer/toClient. Se negocian ANTES de que el server
+  # mande Level Initialize: tras el Identification normal (0x00), si
+  # ambos lados soportan CPE, cada uno manda su ExtInfo (0x10) seguido
+  # de un ExtEntry (0x11) por cada extension que soporta. Quien recibe
+  # va contando ExtEntry hasta llegar a extensionCount y ahi sabe que
+  # terminaron de anunciarse.
+  #
+  # IMPORTANTE: como CPE es una NEGOCIACION, quien arma/lee el flujo
+  # real (no esta libreria) es responsable de:
+  #   - saber que extensiones quedaron acordadas (interseccion de lo
+  #     que mando cada lado)
+  #   - NO usar paquetes de una extension que el otro lado no confirmo
+  #   - decidir el ORDEN en que llegan los ExtEntry (no importa, pero
+  #     hay que juntarlos todos antes de asumir que la negociacion cerro)
+  # =========================================================================
+
+  # ---------------------------------------------------------------------
+  # 0x10 ExtInfo -- anuncia el software del cliente/servidor y cuantas
+  # extensiones va a mandar a continuacion (via ExtEntry, una por una)
+  # ---------------------------------------------------------------------
+  packet_ext_info:
+    container:
+    - name: appName
+      type: string64
+    - name: extensionCount
+      type: i16
+
+  # ---------------------------------------------------------------------
+  # 0x11 ExtEntry -- una extension soportada + su version. Se manda
+  # `extensionCount` veces seguido del ExtInfo correspondiente.
+  # ---------------------------------------------------------------------
+  packet_ext_entry:
+    container:
+    - name: extName
+      type: string64
+    - name: version
+      type: i32
+
+  # ---------------------------------------------------------------------
+  # Extension "ClickDistance" -- toClient only. Cambia el alcance maximo
+  # (en unidades fixed-point) al que el cliente puede interactuar con
+  # bloques. Sin este paquete el cliente usa el default vanilla (~160).
+  # ---------------------------------------------------------------------
+  packet_ext_click_distance:
+    container:
+    - name: distance
+      type: i16               # fixed-point *32, igual que fixedCoord
+
+  # ---------------------------------------------------------------------
+  # Extension "CustomBlocks" -- handshake de 2 pasos:
+  #   toServer: CustomBlockSupportLevel (que nivel soporta el CLIENTE)
+  #   toClient: CustomBlockSupportLevel (que nivel confirma el SERVER,
+  #             <= al que mando el cliente)
+  # Mismo layout en ambas direcciones, un solo byte con el nivel.
+  # ---------------------------------------------------------------------
+  packet_custom_block_support_level:
+    container:
+    - name: supportLevel
+      type: u8
+
+  # ---------------------------------------------------------------------
+  # Extension "HeldBlock" -- toClient only. Fuerza que tipo de bloque
+  # tiene "en mano" el cliente (para servers con item/bloque especial).
+  # ---------------------------------------------------------------------
+  packet_held_block:
+    container:
+    - name: blockToHold
+      type: u8
+    - name: preventChange
+      type: bool              # true = el cliente no puede cambiarlo manual
+
+  # ---------------------------------------------------------------------
+  # Extension "ExtPlayerList" (v2) -- toClient only. Reemplaza el uso de
+  # Spawn/Despawn Player (0x07/0x0c) para la lista de jugadores conectados
+  # (tab list), separando "entidad visible en el mundo" de "aparece en
+  # la lista". nameId es un id PROPIO de esta lista (distinto del
+  # playerId de entidad, puede ir de 0 a 255).
+  # ---------------------------------------------------------------------
+  packet_ext_add_player_name:
+    container:
+    - name: nameId
+      type: i16
+    - name: playerName
+      type: string64
+    - name: listName
+      type: string64          # como aparece en el tab list (puede diferir)
+    - name: groupName
+      type: string64          # nombre del "grupo"/team para ordenar la lista
+    - name: groupRank
+      type: u8                # orden dentro del grupo (menor = mas arriba)
+
+  packet_ext_remove_player_name:
+    container:
+    - name: nameId
+      type: i16
+
+# =============================================================================
+# Direcciones -- ClassiCube no tiene "states" como 1.8 (handshake/status/
+# login/play), es un único estado de juego. Se modela como state fijo
+# "play" para reusar el mismo mecanismo de scope de protodef.
+# =============================================================================
+play:
+  toServer:
+    types:
+      packet:
+        container:
+        - name: name
+          type:
+            mapper:
+              type: u8
+              mappings:
+                '0x00': identification
+                '0x05': set_block
+                '0x08': position_orientation
+                '0x0d': message
+                '0x10': ext_info
+                '0x11': ext_entry
+                '0x12': custom_block_support_level
+        - name: params
+          type:
+            switch:
+              compareTo: name
+              fields:
+                identification: packet_identification
+                set_block: packet_set_block_client
+                position_orientation: packet_position_orientation
+                message: packet_message
+                ext_info: packet_ext_info
+                ext_entry: packet_ext_entry
+                custom_block_support_level: packet_custom_block_support_level
+
+  toClient:
+    types:
+      packet:
+        container:
+        - name: name
+          type:
+            mapper:
+              type: u8
+              mappings:
+                '0x00': identification
+                '0x01': ping
+                '0x02': level_initialize
+                '0x03': level_data_chunk
+                '0x04': level_finalize
+                '0x06': set_block
+                '0x07': spawn_player
+                '0x08': position_orientation
+                '0x09': position_update
+                '0x0a': position_update_only
+                '0x0b': orientation_update
+                '0x0c': despawn_player
+                '0x0d': message
+                '0x0e': disconnect
+                '0x0f': update_user_type
+                '0x10': ext_info
+                '0x11': ext_entry
+                '0x12': custom_block_support_level
+                '0x14': held_block
+                '0x16': ext_add_player_name
+                '0x18': ext_remove_player_name
+                '0x1c': ext_click_distance
+        - name: params
+          type:
+            switch:
+              compareTo: name
+              fields:
+                identification: packet_identification
+                ping: packet_ping
+                level_initialize: packet_level_initialize
+                level_data_chunk: packet_level_data_chunk
+                level_finalize: packet_level_finalize
+                set_block: packet_set_block_server
+                spawn_player: packet_spawn_player
+                position_orientation: packet_position_orientation
+                position_update: packet_position_update
+                position_update_only: packet_position_update_only
+                orientation_update: packet_orientation_update
+                despawn_player: packet_despawn_player
+                message: packet_message
+                disconnect: packet_disconnect
+                update_user_type: packet_update_user_type
+                ext_info: packet_ext_info
+                ext_entry: packet_ext_entry
+                custom_block_support_level: packet_custom_block_support_level
+                held_block: packet_held_block
+                ext_add_player_name: packet_ext_add_player_name
+                ext_remove_player_name: packet_ext_remove_player_name
+                ext_click_distance: packet_ext_click_distance
