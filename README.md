@@ -1,683 +1,525 @@
 # protolib
 
-Pure-Python, `node-protodef`-style declarative binary protocol
-(de)serializer. Describe a protocol's packets in a `.yml`/`.json` file,
-get `bytes -> dict` and `dict -> bytes` for free.
+Pure-Python, dependency-free (core) declarative binary protocol (de)serializer, in the style of [node-protodef](https://github.com/ProtoDef-io/ProtoDef) / [node-minecraft-protocol](https://github.com/PrismarineJS/node-minecraft-protocol). It reads and writes binary packets from a **protocol definition** (JSON, in the original node-protodef format, or a more readable YAML shorthand) instead of hand-rolling struct-packing code for every packet type.
+
+Originally built to reverse-engineer and re-implement the Minecraft protocol (Classic, Java 1.7/1.8, MCPE/Bedrock), but the engine itself is protocol-agnostic — it works for any binary format you can describe as a set of typed fields.
 
 ```python
 from protolib import Protocol
 
-proto = Protocol("my_protocol.yml")
-parsed = proto.parse_packet("play", "toClient", raw_data)
-data = proto.serialize_packet("play", "toClient", "spawn_player", {"x": 320})
+proto = Protocol("protocol.yml")
+pkt = proto.parse_packet("play", "toClient", raw_bytes)
+print(pkt.name, pkt.params)
+
+data = proto.serialize_packet("play", "toServer", "keep_alive", {"keepAliveId": 1})
 ```
 
-This document covers three things: **(1)** how to write a protocol
-file in YAML/JSON, **(2)** every `native` primitive type and how to use
-it, **(3)** the full Python API.
+- **Version:** 0.3.5
+- **License:** MIT
+- **Requires:** Python ≥ 3.9, no runtime dependencies (PyYAML only if you use `.yml`/`.yaml` files)
 
 ---
 
-## 1. Protocol files: YAML and JSON
-
-### 1.1 Overall shape
-
-```yaml
-types:
-  # types valid across the ENTIRE protocol, regardless of state/direction
-  varint: native
-  myCustomType:
-    container:
-    - name: x
-      type: varint
-
-<state_name>:        # e.g.: "play", "login", "handshaking"...
-  toClient:
-    types:
-      # types that only exist for this direction/state, take
-      # PRIORITY over the global ones if there's a name collision
-      packet: ...
-  toServer:
-    types:
-      packet: ...
-```
-
-- **global `types:`** — shared types (primitives, common structs).
-- **`<state>.toClient.types` / `<state>.toServer.types`** — the entry
-  point to parse a packet is always a type named `packet` inside one
-  of these blocks. `parse_packet(state, direction, data)` looks for
-  that `packet`, reads it, and returns `{name, params}`.
-- `state`/`direction` aren't special keywords — they're just the two
-  strings you'll later pass to `parse_packet`/`serialize_packet`. A
-  protocol without real "states" still declares a single block (e.g.
-  `play:`) just to hang `toClient`/`toServer` off of it.
-
-**The `packet` type must always have exactly two fields, `name` and
-`params`** — that's what builds the `ParsedPacket(name=..., params=...)`
-you get back. Standard pattern:
-
-```yaml
-packet:
-  container:
-  - name: name
-    type:
-      mapper:               # wire integer -> packet name
-        type: u8            # (or varint, depending on your protocol)
-        mappings:
-          '0x00': identification
-  - name: params
-    type:
-      switch:                # packet name -> its payload type
-        compareTo: name
-        fields:
-          identification: packet_identification
-```
-
-If `packet` doesn't follow this exact shape, `parse_packet` fails with
-`KeyError: 'name'` — that's how the library knows what to return, not
-an arbitrary restriction.
-
-### 1.2 YAML shorthand vs. native JSON
-
-Internally, every composite type is a 2-element list:
-`["baseType", options]` — that's the original `node-protodef`/
-`minecraft-data` JSON format, understood as-is with no translation:
-
-```json
-"packet_identification": [
-  "container",
-  [
-    { "name": "protocolVersion", "type": "u8" },
-    { "name": "name", "type": "string64" }
-  ]
-]
-```
-
-The YAML loader (`protolib/loader.py`) auto-translates the more
-readable single-key-mapping shorthand into that exact form:
-
-```yaml
-type:
-  switch:
-    compareTo: name
-    fields:
-      identification: packet_identification
-```
-
-`example_protocol.yml` and `example_protocol.json` are mechanically
-equivalent — one is generated from the other, so they round-trip
-byte-for-byte identically. Only mappings whose single key matches a
-known composite type name (`container`, `array`, `switch`, `mapper`,
-`option`, `bitfield`, `bitflags`, `buffer`, `pstring`, `count`,
-`entityMetadataLoop`, `topBitSetTerminatedArray`, `cstring`, plus
-anything passed via `extra_composite_names`) get this treatment —
-everything else (plain type names, options that aren't composites) is
-left as-is.
-
-Use the raw `.json` form directly when: you already have a protocol
-from `minecraft-data` in JSON and don't want to rewrite it; you're
-generating the protocol from another language/script; or you want to
-see exactly what the engine understands with zero ambiguity (useful
-when debugging a `.yml` that isn't loading as expected).
-
-Convert `.yml` → `.json` using the loader itself (guarantees fidelity,
-since it's the same code path `Protocol` uses):
-
-```python
-import json
-from protolib.loader import load_protocol_dict
-
-d = load_protocol_dict("my_protocol.yml")
-json.dump(d, open("my_protocol.json", "w"), indent=2, ensure_ascii=False)
-```
-
-Convert `.json` → `.yml` (best-effort, for migrating an existing
-`minecraft-data`-style file):
-
-```python
-from protolib.loader import protocol_dict_to_yaml
-import json
-raw = json.load(open("protocol.json"))
-open("protocol.yml", "w").write(protocol_dict_to_yaml(raw))
-```
-
-### 1.3 Composite types, one by one
-
-**`container`** — groups named fields, in order:
-
-```yaml
-packet_login:
-  container:
-  - name: protocolVersion
-    type: varint
-  - name: username
-    type: string
-```
-Reads as `{"protocolVersion": ..., "username": ...}`.
-- `anon: true` on a field — instead of nesting under its own name, its
-  sub-fields get merged directly into the parent `dict`. Used to
-  "flatten" a bitfield or switch into loose sibling fields.
-- `condition: <expr>` on a field — only read/written if the expression
-  (same grammar as `eval_condition`, see §3.6) is true.
-
-**`array`** — list of N elements of the same type:
-
-```yaml
-type:
-  array:
-    countType: varint    # reads a varint first, that's the length
-    # count: otherField  # alternative: uses the VALUE of an already-read field
-    type: myItemType
-```
-`countType` prepends an integer that's read/written automatically.
-`count` references a sibling field (typically built with `count`
-below) — reads its existing value as the length, writes nothing extra.
-
-**`switch`** — picks the field's type based on another field's value:
-
-```yaml
-type:
-  switch:
-    compareTo: name        # path to an already-read field
-    fields:
-      valueA: typeForA
-      valueB: typeForB
-    default: void           # optional, if nothing matches
-```
-`compareTo` accepts a plain field name, `../field` (parent container),
-`/field` (absolute root), or a full boolean expression starting with
-`fields.`. `compareToValue` can be used instead for a fixed literal.
-
-**`mapper`** — integer ⟷ symbolic name:
-
-```yaml
-type:
-  mapper:
-    type: varint
-    mappings:
-      '0x00': handshake
-      '0x01': status_request
-```
-A `0x00` on the wire becomes the string `"handshake"` when parsed (and
-back when serializing) — lets a `switch` compare against readable
-names instead of raw ids.
-
-**`bitfield`** — several fields packed into less than 1 byte each:
-
-```yaml
-type:
-  bitfield:
-  - name: type
-    size: 3
-    signed: false
-  - name: index
-    size: 5
-    signed: false
-```
-Sub-fields take up `size` bits, MSB first, within the minimum number
-of bytes needed (padded if they don't fill one exactly). Usually
-combined with `anon: true` on the enclosing container.
-
-**`bitflags`** — an integer as a named set of booleans:
-
-```yaml
-type:
-  bitflags:
-    type: u8
-    flags: [air, water, lava, null, fire]   # position = bit number
-    # or: {air: 0x01, water: 0x02, ...}
-```
-Returns `{"air": true, "water": false, ..., "_value": <raw integer>}`.
-
-**`buffer`** — raw, uninterpreted bytes:
-
-```yaml
-type:
-  buffer:
-    count: 1024        # fixed size, or a reference to a field
-    # countType: varint  # alternative: prefixed length
-    # rest: true         # alternative: everything left in the frame
-```
-
-**`option`** — present only if a preceding boolean flag says so:
-
-```yaml
-type:
-  option: myType
-```
-Reads a `bool` first; `true` → reads `myType` right after; `false` →
-value is `None`, nothing else read.
-
-**`pstring`** — string with a prefixed length:
-
-```yaml
-type:
-  pstring:
-    countType: varint     # how many length-bytes come first
-    # encoding: utf-8      # default
-```
-The `string:` shortcut is this pre-built with `countType: varint`
-(Minecraft Java-style). For fixed-size, unprefixed strings, see
-`string64`/`utf16be64` in §2.
-
-**`count`** — a length-prefix declared as its own sibling field (not
-attached to the array/buffer it counts):
-
-```yaml
-type:
-  count:
-    type: u8              # or varint, etc — how the count itself is encoded
-    countFor: ../items     # path to the field whose length this represents
-```
-On read, just reads an integer. On write, ignores whatever value was
-passed in and writes `len(field at countFor)` instead.
-
-**`entityMetadataLoop`** — list of entries until a terminator byte:
-
-```yaml
-type:
-  entityMetadataLoop:
-    endVal: 0xff        # default; raw byte marking "no more entries"
-    endType: u8          # default; 1-byte type used only for the check
-    type: entityMetadataItem
-```
-Reads entries until the next unread byte (peeked, not consumed) equals
-`endVal`, then consumes that terminator and stops.
-
-**`topBitSetTerminatedArray`** — list that ends when the high bit isn't set:
-
-```yaml
-type:
-  topBitSetTerminatedArray:
-    type: myVarintLikeItem
-```
-Reads entries while the high bit (`0x80`) of each entry's first byte
-is set; stops right after the first entry whose first byte doesn't
-have it set. When writing, the caller must set that bit correctly on
-every item except the last — it's part of each item's own encoding,
-not added by this wrapper.
-
-**`registryEntryHolder`** — modern Minecraft's `IdOr<T>`:
-
-```yaml
-type:
-  registryEntryHolder:
-    idType: varint         # default
-    otherwise:
-      type: myInlineType    # read/written only when the raw id is 0
-```
-`id == 0` → inline `otherwise.type` value follows. `id != 0` (`id = n`)
-→ reference to registry index `n - 1`. Python shape:
-`{"type": "inline", "value": ...}` or `{"type": "reference", "id": N}`.
-
-**`registryEntryHolderSet`** — modern Minecraft's `HolderSet<T>`:
-
-```yaml
-type:
-  registryEntryHolderSet:
-    idType: varint         # default
-```
-Wire: `[varint count]`; `count == 0` → followed by a `cstring` tag name
-(e.g. `"#minecraft:trim_materials"`); `count > 0` → followed by exactly
-`count` ids (no +1/-1 shift here). Python shape:
-`{"type": "tag", "tagName": "..."}` or `{"type": "ids", "ids": [...]}`.
-
-**`cstring` (composite form)** — same null-terminated string as the
-native `cstring`, but with a configurable encoding:
-
-```yaml
-type:
-  cstring:
-    encoding: utf-8   # default
-```
-
----
-
-## 2. `native` types: the primitive catalog
-
-`native` in the `.yml` means "resolve this by name in
-`protolib/primitives.py`" instead of defining it inline. Every name
-below is usable directly as `type: <name>` anywhere in a protocol
-file, and is also importable from `protolib.PRIMITIVES` in Python.
-
-### Fixed-width integers
-
-Full family: `{u,i} × {8,16,24,32,40,48,56,64}`, big-endian by
-default, plus an `l`-prefixed little-endian variant of each
-(`lu8, li8, ..., lu64, li64`) — 32 names total.
-
-| Name | Size | Notes |
-|---|---|---|
-| `u8`/`i8` | 1 byte | unsigned/signed |
-| `u16`/`i16` | 2 bytes | big-endian |
-| `u24`/`i24` | 3 bytes | big-endian; RakNet split-packet count, message index, etc. |
-| `u32`/`i32` | 4 bytes | big-endian |
-| `u40`/`i40` | 5 bytes | big-endian |
-| `u48`/`i48` | 6 bytes | big-endian |
-| `u56`/`i56` | 7 bytes | big-endian |
-| `u64`/`i64` | 8 bytes | big-endian |
-| `lu8`…`li64` | same sizes | `l` + any of the above = little-endian (e.g. `lu24`, `li48`) |
-
-```yaml
-- name: entityId
-  type: i32
-- name: sequenceNumber
-  type: lu24    # little-endian, 3 bytes (RakNet-style)
-```
-
-### Floats
-
-| Name | Size | Notes |
-|---|---|---|
-| `f16` | 2 bytes | IEEE 754 half-float, ~3 decimal digits precision |
-| `f32` | 4 bytes | single precision |
-| `f64` | 8 bytes | double precision |
-| `lf16`/`lf32`/`lf64` | same | little-endian variants |
-
-### Variable-length integers
-
-| Name | Notes |
-|---|---|
-| `varint`/`varlong` | **signed** LEB128, no zigzag applied |
-| `uvarint`/`uvarlong` | unsigned LEB128 |
-| `varint128`/`uvarint128` | same LEB128 scheme extended to 128 bits (up to 19 bytes) — IDs too big for 64 bits (Snowflake-style IDs, truncated hashes) |
-| `zigzag32`/`zigzag64` | true zigzag LEB128 (Protocol Buffers style: `0,-1,1,-2,2 -> 0,1,2,3,4`) |
-
-```yaml
-- name: keepAliveId
-  type: varlong
-- name: deltaX
-  type: zigzag32
-```
-
-### Bool / void / strings
-
-| Name | Size | Notes |
-|---|---|---|
-| `bool` | 1 byte | |
-| `void` | 0 bytes | useful as an empty `switch` case |
-| `cstring` | variable | `\0`-terminated, UTF-8 |
-| `restBuffer` | variable | all remaining bytes in the buffer, no length prefix — put it last in a container |
-
-### UUID
-
-| Name | Size | Notes |
-|---|---|---|
-| `UUID` | 16 bytes | reads/writes as the dashed string form (`"1111...1111"`); on the wire it's just the 16 raw bytes |
-
-### NBT
-
-| Name | Notes |
-|---|---|
-| `nbt` | Minecraft's NBT format, **with** name prefix (`[u16 nameLen][name][payload]`) |
-| `optionalNbt` | identical format/alias of `nbt`, semantically "may legitimately be absent" (`None` reads/writes as a lone `TAG_End`) |
-| `anonymousNbt` | same payload, **without** the name prefix — modern Minecraft (1.20.2+) chat components, item `custom_data`, `block_entity_data` |
-| `anonOptionalNbt` | alias of `anonymousNbt`, same "may be absent" semantics |
-
-`nbt`/`optionalNbt` decode to `{"name": str, "type": "compound"|"int"|"list"|..., "value": ...}` (or `None` for `TAG_End`).
-`anonymousNbt`/`anonOptionalNbt` decode to the same shape **without** the `"name"` key, so the two families can never be confused with each other.
-
-```yaml
-- name: entityData
-  type: nbt
-- name: customData
-  type: anonymousNbt
-```
-
-### Fixed-size strings/buffers (ClassiCube-style, always fixed length, never prefixed)
-
-| Name | Size | Notes |
-|---|---|---|
-| `string64` | 64 bytes | CP437-encoded, space-padded/truncated to exactly 64 bytes |
-| `utf16be64` | 128 bytes | UTF-16BE, 64 **characters** (128 bytes on the wire), space-padded |
-| `buffer1024` | 1024 bytes | raw bytes, `\x00`-padded/truncated |
-| `buffer64` | 64 bytes | raw bytes, `\x00`-padded/truncated |
-
-Need a different fixed length? Build your own with the factory
-functions (not registered under a name, you assign one):
-
-```python
-from protolib.primitives import make_fixed_cp437_string, make_fixed_buffer
-from protolib import make_fixed_utf16be_string
-
-my_string32 = make_fixed_cp437_string(32)   # CP437, 32 bytes
-my_buffer256 = make_fixed_buffer(256)       # raw, 256 bytes
-my_name16 = make_fixed_utf16be_string(16)   # UTF-16BE, 16 chars / 32 bytes
-```
-
-### Fixed-point (ClassiCube)
-
-| Name | Size | Notes |
-|---|---|---|
-| `fixedCoord` | 2 bytes | signed, same layout as `i16`; the raw wire value is `real_value * 32` |
-| `fixedCoordDelta` | 1 byte | signed, same layout as `i8`; used in compressed position packets (deltas between updates) |
-
-### Adding your own native primitive
-
-If you need a type that isn't a composition of the above (a
-differently-encoded fixed string, a buffer of another fixed size not
-worth a factory call every time, etc.), follow the pattern of
-`make_fixed_cp437_string`/`make_fixed_buffer` in `primitives.py` and
-register the result in the `PRIMITIVES` dict at the end of that file —
-it becomes usable as `native`/by name in any `.yml` afterward.
-
----
-
-## 3. Full API reference
-
-### 3.1 `protolib.Protocol` — the main entry point
-
-```python
-from protolib import Protocol
-
-Protocol(protocol_source: dict | str, *, fmt: str | None = None)
-```
-`protocol_source` accepts: a path to `.json`/`.yml`/`.yaml`; an
-in-memory string with JSON or YAML content; or an already-parsed
-`dict` in native `["type", opts]` form. `fmt` forces `"json"`/`"yaml"`
-instead of autodetecting (useful for in-memory content with no
-reliable extension).
-
-> **Relative paths** resolve against the process's current working
-> directory, not the calling script's location. If the file genuinely
-> isn't found, `Protocol(...)` raises `LoaderError` naming the path it
-> looked for and the cwd used. To make a script location-independent:
-> ```python
-> import os
-> here = os.path.dirname(os.path.abspath(__file__))
-> proto = Protocol(os.path.join(here, "my_protocol.yml"))
-> ```
-
-**High-level packet API:**
-
-```python
-proto.parse_packet(state: str, direction: str, data: bytes) -> ParsedPacket
-proto.serialize_packet(state: str, direction: str, name: str, params: dict) -> bytes
-```
-`ParsedPacket` is a dataclass: `name: str`, `params: dict`,
-`bytes_read: int` (how many bytes of `data` were actually consumed —
-compare against `len(data)` to check for leftover/misaligned bytes).
-
-**Direct type access** (bypassing the `packet` entry point — useful
-for tests, or for parsing/serializing a standalone sub-structure like
-a single slot or NBT tag):
-
-```python
-proto.read_named(state: str, direction: str, type_name: str, data: bytes) -> Any
-proto.write_named(state: str, direction: str, type_name: str, value: Any) -> bytes
-```
-
-**Low-level, type-definition-level API** (what the above are built
-on; useful when embedding a read/write inside your own code that
-already holds a `Reader`/`Writer`):
-
-```python
-proto.read_type(type_def, reader, scope, fields, root=None, parent=None) -> Any
-proto.write_type(type_def, value, writer, scope, fields, root=None, parent=None) -> None
-proto.get_scope(state: str, direction: str) -> Scope
-```
-
-`Scope` is a dataclass wrapping `types: dict[str, TypeDef]` — the
-`state.direction`-local type table, checked before falling back to the
-protocol's global `types:`.
-
-### 3.2 `protolib.Reader` / `protolib.Writer` — raw byte I/O
-
-```python
-from protolib import Reader, Writer, BufferUnderrun
-
-r = Reader(buffer: bytes, offset: int = 0)
-r.remaining          # property: len(buffer) - offset
-r.ensure(n: int)      # raises BufferUnderrun if fewer than n bytes remain
-r.read_bytes(n: int) -> bytes
-r.peek_byte() -> int  # reads without advancing the cursor
-
-w = Writer()
-w.write_bytes(data: bytes)
-w.result() -> bytes   # concatenates every chunk written so far
-len(w)                 # total bytes written so far
-```
-`BufferUnderrun(offset, needed, available)` is raised by `Reader` when
-asked to read more bytes than remain.
-
-### 3.3 `protolib.PRIMITIVES` / `protolib.Primitive`
-
-```python
-from protolib import PRIMITIVES, Primitive
-
-PRIMITIVES["varint"].read(reader) -> Any
-PRIMITIVES["varint"].write(value, writer) -> None
-PRIMITIVES["varint"].size_of(value) -> int | None
-```
-`Primitive` is `@dataclass(frozen=True)` with 4 fields: `name`,
-`read(reader) -> Any`, `write(value, writer) -> None`, and optional
-`size_of(value) -> int | None`.
-
-### 3.4 `protolib.PacketFramer` — length-prefixed streaming
-
-For protocols that wrap each packet as `[varint length][payload]`
-(Minecraft-style). Knows nothing about the protocol file — just splits
-a raw socket byte stream into complete frames. Doesn't implement
-compression or encryption; add those as a layer between the socket and
-the framer if your protocol needs them.
-
-```python
-from protolib import PacketFramer
-
-framer = PacketFramer()
-frames: list[bytes] = framer.feed(chunk: bytes)   # 0, 1, or several complete frames
-raw = PacketFramer.wrap(frame: bytes) -> bytes     # adds the varint length-prefix
-```
-`feed()` raises `ValueError` if a negative length-prefix is decoded
-(broken or adversarial peer) — the connection should be dropped in
-that case, since the framing of all subsequent packets can no longer
-be trusted.
-
-### 3.5 `protolib.loader` — loading and format conversion
-
-```python
-from protolib import load_protocol_dict, protocol_dict_to_yaml, LoaderError
-
-load_protocol_dict(
-    source: str | dict,
-    *,
-    fmt: str | None = None,
-    extra_composite_names: frozenset[str] | None = None,
-) -> dict
-```
-Same loading rules as `Protocol(...)` (§3.1); this is what `Protocol`
-calls internally. `extra_composite_names` lets the YAML shorthand
-recognize composite types you added yourself beyond the built-in set.
-
-```python
-protocol_dict_to_yaml(protocol_dict: dict) -> str
-```
-Inverse, best-effort operation: native `["type", opts]` dict → readable
-YAML shorthand text. Meant to kick off a JSON→YAML migration, not
-guaranteed to be byte-for-byte invertible.
-
-`LoaderError` (subclass of `ProtolibError`) — file not found, invalid
-JSON/YAML syntax, or PyYAML not installed when a `.yml` is requested.
-
-### 3.6 `protolib.eval_condition` — the `condition`/expression grammar
-
-```python
-from protolib import eval_condition
-
-eval_condition(expr: str, fields: dict, root: dict | None = None,
-                parent: dict | None = None) -> bool
-```
-Deliberately **not** `eval()`/`exec()` — a small parser for a safe
-subset of JS-like boolean expressions:
-
-```
-fields.someField === 1
-fields.type !== 0 && fields.flag == true
-$root.version >= 47
-$parent.hasData
-(fields.a > 0) || (fields.b < 10)
-```
-Operators: `=== !== == != >= <= > < && ||`. Paths: `fields.x`,
-`$root.x`, `$parent.x`, with `[N]` index support. A single operand with
-no comparison is evaluated for truthiness (JS/Python semantics).
-Raises `ConditionError` on an invalid expression.
-
-### 3.7 `protolib.nbt` — NBT read/write functions
-
-```python
-from protolib import read_nbt, write_nbt, NBTError
-from protolib.io import Reader, Writer
-
-tag = read_nbt(Reader(raw_bytes))
-# -> {"name": str, "type": "compound"|"int"|"list"|..., "value": ...} | None
-#    (None only if the first byte is TAG_End)
-
-w = Writer()
-write_nbt(tag, w)
-raw_bytes_back = w.result()
-```
-`read_optional_nbt`/`write_optional_nbt` — identical aliases, named to
-match `optionalNbt` from `node-minecraft-protocol`.
-
-```python
-from protolib import read_anonymous_nbt, write_anonymous_nbt
-
-tag = read_anonymous_nbt(Reader(raw_bytes))
-# -> {"type": "compound"|"int"|"list"|..., "value": ...} | None  (no "name" key)
-
-w = Writer()
-write_anonymous_nbt(tag, w)
-```
-`read_anon_optional_nbt`/`write_anon_optional_nbt` — aliases, same
-relationship to `anonymousNbt` as `optionalNbt` has to `nbt`.
-`NBTError` is raised on an unknown tag type, etc.
-
-### 3.8 `protolib.errors` — every exception
-
-All inherit from `ProtolibError` (itself an `Exception`):
-
-| Exception | Raised when |
-|---|---|
-| `UnknownTypeError(type_name)` | a type name isn't a primitive, and isn't found in the local scope or global `types:` |
-| `InvalidTypeDefinition(definition)` | a type definition isn't a recognized string or 2-element list |
-| `SwitchCaseNotFound(compare_to, value)` | a `switch` has no matching `fields` entry and no `default` |
-| `ConditionError(condition, reason)` | a `condition`/`eval_condition` expression is malformed |
-| `LoaderError` | protocol file not found, invalid JSON/YAML, or PyYAML missing (`protolib.loader`) |
-| `NBTError` | malformed NBT data (`protolib.nbt`) |
-
-```python
-from protolib import (
-    ProtolibError, UnknownTypeError, InvalidTypeDefinition,
-    SwitchCaseNotFound, ConditionError, LoaderError, NBTError,
-)
-```
+## Table of contents
+
+1. [Install](#install)
+2. [Core concepts](#core-concepts)
+3. [Quick start](#quick-start)
+4. [Protocol format (JSON, node-protodef style)](#protocol-format-json-node-protodef-style)
+5. [YAML shorthand](#yaml-shorthand)
+6. [Composite types](#composite-types)
+7. [Primitive types catalog](#primitive-types-catalog)
+8. [Conditions (`condition` fields)](#conditions-condition-fields)
+9. [Field paths (`../field`, `/field`)](#field-paths-field-field)
+10. [Parametrizable named types (`$arg`)](#parametrizable-named-types-arg)
+11. [NBT](#nbt)
+12. [PacketFramer (length-prefixed streams)](#packetframer-length-prefixed-streams)
+13. [Errors](#errors)
+14. [Public API reference](#public-api-reference)
+15. [Extending the library](#extending-the-library)
+16. [Project layout](#project-layout)
+17. [Running the tests](#running-the-tests)
 
 ---
 
 ## Install
 
 ```bash
-pip install protolib          # core, JSON only
-pip install protolib[yaml]    # + YAML support
+pip install protolib
+# or, for YAML protocol files:
+pip install protolib[yaml]
 ```
-Python 3.9+, zero required dependencies.
+
+From source:
+
+```bash
+pip install .
+```
+
+## Core concepts
+
+protolib is built in three layers:
+
+1. **`io.py`** — the lowest layer. `Reader` (a cursor over a `bytes`-like buffer) and `Writer` (an accumulator of byte chunks). Knows nothing about protocols.
+2. **`primitives.py`** — fixed byte-level types that don't depend on any protocol definition: `u8`, `i32`, `varint`, `bool`, `cstring`, `UUID`, NBT wrappers, etc. Each one is a `Primitive(name, read, write, size_of)`. Registered by name in the `PRIMITIVES` dict.
+3. **`core.py`** — the engine. The `Protocol` class loads a protocol definition (a dict of named types + per-state/direction packet tables) and knows how to recursively read/write **composite types** (`container`, `array`, `switch`, `mapper`, `bitfield`, etc.), resolving primitives and named types along the way.
+
+On top of that:
+
+- **`loader.py`** translates a more readable YAML shorthand into the internal `["type", options]` form that the engine understands, or loads JSON directly (unmodified minecraft-data protocol.json files work as-is).
+- **`framer.py`** implements the common `[varint length][payload]` stream framing used by Minecraft-like protocols, independent of packet *contents*.
+- **`nbt.py`** implements Minecraft's NBT format, used as a primitive type inside packets.
+- **`conditions.py`** implements a small, safe (no `eval`) expression evaluator for conditional fields.
+
+## Quick start
+
+```python
+from protolib import Protocol
+
+# Load from a file (format auto-detected from the extension)
+proto = Protocol("protocol.yml")     # or "protocol.json"
+
+# Or from an already-parsed dict / in-memory string
+proto = Protocol({"types": {...}})
+proto = Protocol(yaml_text, fmt="yaml")
+
+# Parse a full packet (looks up scope by state/direction, decodes the
+# "packet" type, which typically has "name" + "params" fields)
+pkt = proto.parse_packet("play", "toServer", raw_bytes)
+print(pkt.name, pkt.params, pkt.bytes_read)
+
+# Serialize a packet by name
+data = proto.serialize_packet("play", "toClient", "keep_alive", {"keepAliveId": 1})
+
+# Read/write a standalone named type (bypassing "packet"), e.g. a slot or NBT
+value = proto.read_named("play", "toClient", "slot", raw_bytes)
+data = proto.write_named("play", "toClient", "slot", value)
+```
+
+Migrating an existing `protocol.json` (minecraft-data format) to the YAML shorthand:
+
+```python
+import json
+from protolib.loader import protocol_dict_to_yaml
+
+raw = json.load(open("protocol.json"))
+open("protocol.yml", "w").write(protocol_dict_to_yaml(raw))
+```
+
+## Protocol format (JSON, node-protodef style)
+
+A protocol definition is a dict with a top-level `"types"` key (globally available named types) plus one key per connection **state**, each with `"toClient"` / `"toServer"` sub-keys holding their own `"types"` (which take priority over global types for that state+direction):
+
+```json
+{
+  "types": {
+    "varint": "native",
+    "string": ["pstring", {"countType": "varint"}]
+  },
+  "play": {
+    "toClient": {
+      "types": {
+        "packet": ["container", [
+          {"name": "name", "type": ["mapper", {"type": "varint", "mappings": {"0x00": "keep_alive"}}]},
+          {"name": "params", "type": ["switch", {"compareTo": "name", "fields": {"keep_alive": "packet_keep_alive"}}]}
+        ]],
+        "packet_keep_alive": ["container", [
+          {"name": "keepAliveId", "type": "varint"}
+        ]]
+      }
+    }
+  }
+}
+```
+
+A composite type is always a 2-element list: `["baseType", options]`. This is exactly the format used by `minecraft-data`'s `protocol.json` files, so those load unmodified.
+
+Type names are resolved first against the local scope (`state.direction.types`), then against the global `types`. Primitive names (`varint`, `i32`, ...) are checked first, before any named-type lookup.
+
+## YAML shorthand
+
+Hand-writing `["type", {...}]` two-element lists in YAML is error-prone. protolib's loader (`loader.py`) accepts a friendlier single-key-mapping form and translates it recursively into the internal list form:
+
+```yaml
+# YAML shorthand:
+packet_keep_alive:
+  container:
+  - name: keepAliveId
+    type: varint
+
+# is equivalent to the JSON:
+# "packet_keep_alive": ["container", [{"name": "keepAliveId", "type": "varint"}]]
+```
+
+Only single-key mappings whose key is a **known composite type name** are treated as shorthand (`container`, `array`, `switch`, `mapper`, `option`, `bitfield`, `bitflags`, `buffer`, `pstring`, `count`, `entityMetadataLoop`, `topBitSetTerminatedArray`, `cstring`). Anything else (a plain type name string, or a mapping that isn't a shorthand match) is left as-is. You can also mix explicit `[type, opts]` lists directly in the YAML if you prefer.
+
+Loading is auto-detected from the file extension (`.json` vs `.yml`/`.yaml`), or forced with `Protocol(source, fmt="yaml")`. In-memory strings (not existing file paths) are auto-detected by content (`{`/`[` → JSON, otherwise YAML).
+
+### `xxx: native` — what it actually does (and doesn't)
+
+`examples/example_protocol.yml` starts with entries like:
+
+```yaml
+types:
+  varint: native
+  u8: native
+  container: native
+  switch: native
+```
+
+This is **purely documentation, not a declaration you need**. `varint`, `u8`, `container`, `switch`, etc. are resolved directly by `core.py` — primitives come straight from `PRIMITIVES` and composite base types from `_composite_handlers`, neither of which ever looks at `types:` to check whether a name was "registered" first. You can delete every `xxx: native` line from a protocol file and it will parse and run identically.
+
+The value is for a human reading the file: seeing `varint: native` tells you "this name is a built-in, don't go looking for its definition somewhere else in this same file" — as opposed to a real named type like:
+
+```yaml
+types:
+  string:
+    pstring:
+      countType: varint
+```
+
+Here `string` genuinely **is** defined in this file (as a `pstring` with a varint length prefix) — that's a real named type you're creating, not a native. The rule of thumb: if the right-hand side is the literal word `native`, it's just a label/comment for a type that already exists in the engine; if it's an actual type definition (`pstring`, `container`, `switch`, ...), you're defining a new named type that other parts of the protocol can then reference by name.
+
+You only need to actually **write** a `types:` entry when either:
+- you're defining a genuinely new named type (like `string` above), or
+- you want a short alias for something you'll reuse in several places (e.g. `entityMetadataItem`, `itemByKind` in the [parametrizable types](#parametrizable-named-types-arg) section).
+
+## Composite types
+
+All composite types are declared as `["baseType", options]` (or the YAML shorthand equivalent). Read/write handlers live in `core.py`, registered in `Protocol._composite_handlers` / `_composite_write_handlers`.
+
+| Type | Purpose |
+|---|---|
+| `container` | Ordered list of named fields, each with its own `type` (and optional `condition`). Fields can be `anon: true` to merge a sub-container's fields directly into the parent instead of nesting. |
+| `array` | Homogeneous list. Length comes from a fixed `count` (int or field path), or a `countType` (a type read/written just before the items, e.g. `varint`). |
+| `count` | A length-prefix declared as its own sibling field elsewhere in the container (instead of attached to the array via `countType`). On write, ignores the passed-in value and writes `len(field(countFor))`. |
+| `switch` | Picks a type based on another field's value. `compareTo` (a field path) or `compareToValue` (a literal) selects a case from `fields`; `default` is used if no case matches. |
+| `mapper` | Translates a raw integer to a symbolic name and back (e.g. packet IDs ↔ names). Unmatched values pass through as the raw integer. |
+| `option` | Optional value, preceded by a 1-byte bool ("is it present?"). `None` ⇄ absent. |
+| `bitfield` | Packs/unpacks several named sub-fields into N bits each, MSB-first, padded up to a whole byte if needed. Supports `signed: true` per sub-field. |
+| `bitflags` | An integer interpreted as a named set of boolean flags — either a bitmask dict (`{name: mask}`, or `{name: bitPosition}` with `shift: true`) or a positional list (`["flagA", "flagB", ...]`, LSB-first unless `big: true`). The raw integer is always included under `_value`. |
+| `buffer` | Raw bytes, with `count` (fixed or field-referencing), `countType` (length-prefixed), or `rest: true` (consumes everything remaining). |
+| `pstring` | String with a configurable length prefix (`countType`, default `varint`) or explicit `count`, plus `encoding` (default `utf-8`). |
+| `cstring` (composite form) | Like the `cstring` primitive, but with a configurable `encoding`. The plain `"cstring"` primitive is always UTF-8. |
+| `entityMetadataLoop` | Reads entries until a 1-byte terminator (`endVal`, default `0xFF`) is *peeked* (not consumed as a separate read — it's part of each entry's own encoding, typically a bitfield). |
+| `topBitSetTerminatedArray` | Reads entries while the high bit (`0x80`) of each entry's first byte is set — a LEB128-like "more items follow" pattern (used by RakNet-style formats). |
+| `registryEntryHolder` | Modern Minecraft `IdOr<T>`: `id == 0` means an inline value follows (`otherwise.type`); `id != 0` is a registry reference (`id - 1`). Represented in Python as `{"type": "inline", "value": ...}` or `{"type": "reference", "id": ...}`. |
+| `registryEntryHolderSet` | Modern Minecraft `HolderSet<T>`: either a tag reference (`{"type": "tag", "tagName": "#minecraft:..."}`) or an explicit list of ids (`{"type": "ids", "ids": [...]}`). |
+
+### Conditional fields
+
+Any field inside a `container` can have a `condition` (a string expression, see [Conditions](#conditions-condition-fields)) — if it evaluates to falsy, the field is skipped entirely on both read and write.
+
+### Example: `switch` + `mapper` (typical packet dispatch table)
+
+```yaml
+packet:
+  container:
+  - name: name
+    type:
+      mapper:
+        type: varint
+        mappings:
+          '0x00': keep_alive
+          '0x01': login_success
+  - name: params
+    type:
+      switch:
+        compareTo: name
+        fields:
+          keep_alive: packet_keep_alive
+          login_success: packet_login_success
+```
+
+### Example: `bitfield` + `switch` reading a packed type/index byte
+
+```yaml
+entry:
+  container:
+  - anon: true
+    type:
+      bitfield:
+      - {name: kind, size: 3, signed: false}
+      - {name: index, size: 5, signed: false}
+  - name: value
+    type:
+    - itemByKind          # named, parametrizable type (see below)
+    - compareTo: kind
+```
+
+## Primitive types catalog
+
+Registered in `PRIMITIVES` (`primitives.py`), resolvable by name directly in a `type:` field — no `["type", {}]` wrapper needed.
+
+**Fixed-width integers, big-endian:**
+`i8` `u8` `i16` `u16` `i24` `u24` `i32` `u32` `i40` `u40` `i48` `u48` `i56` `u56` `i64` `u64`
+
+**Same family, little-endian** (prefix `l`): `li8` `lu8` `li16` `lu16` `li24` `lu24` `li32` `lu32` `li40` `lu40` `li48` `lu48` `li56` `lu56` `li64` `lu64`
+(`li8`/`lu8` are aliases of `i8`/`u8` — 1 byte has no endianness, but they're exposed under the `l*` name too for consistency with protocol.json files that reference them that way.)
+
+**Floats:** `f16` (IEEE 754 half-float), `f32`, `f64`, and little-endian `lf16` `lf32` `lf64`.
+
+**Varints (LEB128, Minecraft/protobuf style):** `varint` / `varlong` (signed, zigzag-free — same bit layout as unsigned but Python-side range depends on use), `uvarint` / `uvarlong` (unsigned), `varint128` / `uvarint128` (128-bit range, e.g. for big numeric IDs).
+
+**Zigzag varints (protobuf style):** `zigzag32`, `zigzag64` — `0,-1,1,-2,2 → 0,1,2,3,4` before LEB128 encoding.
+
+**Strings / buffers:** `cstring` (null-terminated, UTF-8), `restBuffer` (consumes all remaining bytes — must go last in a container), `string64` (64 bytes, CP437, space-padded, non-representable chars become `"?"`), `utf16be64` (64 *characters*, UTF-16BE, space-padded, 128 bytes on the wire — lossless for accents/most alphabets), `buffer1024` / `buffer64` (fixed-size raw byte blocks, zero-padded).
+
+**Other:** `bool` (1 byte), `void` (0 bytes — reads `None`, writes nothing), `UUID` (16 raw bytes ⇄ dashed string), `fixedCoord` / `fixedCoordDelta` (Minecraft Classic Q10.5 fixed-point: same layout as `i16`/`i8`, semantic name only — the ×32 scaling is the caller's responsibility).
+
+**NBT:** `nbt`, `optionalNbt`, `anonymousNbt`, `anonOptionalNbt` — see [NBT](#nbt).
+
+Need a custom fixed-length string/buffer? Use the factory functions directly instead of a generic primitive:
+
+```python
+from protolib.primitives import make_fixed_cp437_string, make_fixed_utf16be_string, make_fixed_buffer
+
+my_string32 = make_fixed_cp437_string(32)
+my_buffer256 = make_fixed_buffer(256)
+```
+
+## Conditions (`condition` fields)
+
+`conditions.py` implements a small, deliberately **`eval`-free** parser for a JS-like boolean expression subset, used in `condition` fields of container entries:
+
+```
+expr       := or_expr
+or_expr    := and_expr ( '||' and_expr )*
+and_expr   := comparison ( '&&' comparison )*
+comparison := operand ( ('===' | '!==' | '==' | '!=' | '>=' | '<=' | '>' | '<') operand )?
+operand    := path | literal | '(' expr ')'
+path       := ('fields' | '$root' | '$parent') ('.' NAME | '[' INT ']')*
+literal    := INT | FLOAT | STRING | 'true' | 'false' | 'null'
+```
+
+```yaml
+container:
+- name: hasName
+  type: bool
+- name: customName
+  type: string
+  condition: "fields.hasName === true"
+```
+
+`==`/`!=` use JS-style loose coercion, but scoped to only what a binary protocol realistically needs: comparing a number against a numeric string (`"0x1f"`, `"31"`). Everything else compares as-is. `===`/`!==` are always strict.
+
+## Field paths (`../field`, `/field`)
+
+Inside composite type options (`array.count`, `buffer.count`, `pstring.count`, `switch.compareTo`, `count.countFor`), paths follow node-protodef's convention (`resolve_field_path` in `core.py`):
+
+- `"name"` → a field on the *current* container
+- `"../name"` → one level up, to the parent container
+- `"/name"` → absolute, from the root container
+
+> **Note:** unlike node-protodef's full parent-chain, this port tracks only one explicit `parent` level. `"../../x"` and deeper fall back to root instead of walking further up — this covers every real-world protocol.json case encountered so far (at most a single `../`).
+
+A `container` used **inline** as an array's item type does *not* push its own parent level (so `../field` inside an array item reaches the container that holds the array, not the item itself) — this matters if you need a switch inside an array item to compare against a sibling field of the array's *owner*, not of the item. A container referenced **by name**, on the other hand, always pushes its own level. See `entradaJugador` vs. the inline form in `examples/example_protocol.yml` for a worked example of this exact distinction.
+
+## Parametrizable named types (`$arg`)
+
+A named type can declare `"$name"` placeholders and be invoked with concrete values via `[typeName, {arg: value}]` — parity with node-protodef's `extendType`/`produceArgs`. This is exactly how `minecraft-data` defines `entityMetadataItem`.
+
+```yaml
+types:
+  itemByKind:
+    switch:
+      compareTo: $compareTo    # placeholder
+      fields:
+        '0': i8
+        '1': i32
+        '2': string
+
+  # used elsewhere with a concrete compareTo:
+  entry:
+    container:
+    - name: kind
+      type: varint
+    - name: value
+      type:
+      - itemByKind
+      - compareTo: kind        # $compareTo -> "kind" for this use site
+```
+
+Placeholders not provided at the use site are left as the literal string `"$name"` (same as node-protodef).
+
+## NBT
+
+`nbt.py` implements Minecraft's Named Binary Tag format (big-endian, no compression — gzip/zlib, if applicable, is the caller's responsibility before/after this layer). Four variants, matching real protocol.json usage:
+
+| Function pair | Format | Use case |
+|---|---|---|
+| `read_nbt` / `write_nbt` | `[u8 type][u16 nameLen][name][payload]` | Normal named root tag |
+| `read_optional_nbt` / `write_optional_nbt` | same as above | Semantically "may be absent" (a standalone `TAG_End` already means absent) |
+| `read_anonymous_nbt` / `write_anonymous_nbt` | `[u8 type][payload]` (no name) | Modern Minecraft (1.20.2+) chat components, item `custom_data`, etc. — saves 2 bytes where the name is always `""` |
+| `read_anon_optional_nbt` / `write_anon_optional_nbt` | same as anonymous | Optional anonymous variant |
+
+Python representation preserves both the explicit type and (for named tags) the name, since a plain `int`/`float` can't otherwise round-trip unambiguously:
+
+```python
+{"name": "root", "type": "compound", "value": {
+    "health": {"type": "int", "value": 20},
+    "items": {"type": "list", "value": {"type": "int", "value": [1, 2, 3]}},
+}}
+```
+
+All 12 standard tag types are supported (`byte`, `short`, `int`, `long`, `float`, `double`, `byteArray`, `string`, `list`, `compound`, `intArray`, `longArray`).
+
+## PacketFramer (length-prefixed streams)
+
+Minecraft (and many similar protocols) frame each packet on the wire as `[varint length][payload]`. `framer.py` handles only this outer framing — it knows nothing about packet *contents*; parsing `{name, params}` out of a frame is `Protocol.parse_packet()`'s job, a separate layer.
+
+```python
+from protolib import PacketFramer
+
+framer = PacketFramer()
+
+# feed() accumulates bytes from a socket and returns 0+ complete frames
+# (handles partial reads and multiple packets arriving in one chunk)
+for chunk in socket_reader():
+    for frame in framer.feed(chunk):
+        pkt = proto.parse_packet("play", "toServer", frame)
+        handle(pkt)
+
+# wrap() adds the length-prefix before sending
+raw = proto.serialize_packet("play", "toClient", "keep_alive", {"keepAliveId": 1})
+sock.sendall(PacketFramer.wrap(raw))
+```
+
+`PacketFramer` does **not** implement compression (post-login threshold) or encryption — if your protocol needs those, insert an intermediate layer between the socket and the framer (decompress/decrypt the frame's bytes before handing them to `parse_packet`).
+
+A negative length-prefix (high bit set on a signed-varint read) raises `ValueError` immediately rather than silently mis-framing the rest of the stream.
+
+## Errors
+
+All engine-specific exceptions derive from `ProtolibError` (`errors.py`):
+
+| Exception | Raised when |
+|---|---|
+| `UnknownTypeError` | A type name isn't a primitive and isn't found in the local or global scope |
+| `InvalidTypeDefinition` | A malformed type definition (wrong shape, missing required option, `array`/`buffer`/`pstring` `count` resolving to a non-int, mismatched fixed `buffer` length, unrecognized `registryEntryHolder(Set)` value shape) |
+| `SwitchCaseNotFound` | A `switch`'s `compareTo`/`compareToValue` doesn't match any case in `fields` and there's no `default` |
+| `ConditionError` | A `condition` expression fails to parse or evaluate |
+
+`BufferUnderrun` (`io.py`, not a `ProtolibError` subclass) is raised when a `Reader` is asked for more bytes than remain in the buffer — carries `.offset`, `.needed`, `.available`.
+
+`LoaderError` (`loader.py`, subclass of `ProtolibError`) covers file-not-found, invalid JSON/YAML, missing PyYAML, or an unrecognized format string.
+
+## Public API reference
+
+Everything below is importable directly from `protolib`:
+
+```python
+from protolib import (
+    Protocol, ParsedPacket, Scope,
+    Reader, Writer, BufferUnderrun,
+    PRIMITIVES, Primitive, make_fixed_utf16be_string,
+    ProtolibError, UnknownTypeError, InvalidTypeDefinition,
+    SwitchCaseNotFound, ConditionError,
+    eval_condition,
+    PacketFramer,
+    load_protocol_dict, protocol_dict_to_yaml, LoaderError,
+    read_nbt, write_nbt, NBTError,
+    read_anonymous_nbt, write_anonymous_nbt,
+    read_anon_optional_nbt, write_anon_optional_nbt,
+)
+```
+
+### `Protocol`
+
+```python
+Protocol(protocol_source: dict | str, *, fmt: str | None = None)
+```
+`protocol_source` accepts an already-parsed dict, a path to `.json`/`.yml`/`.yaml`, or in-memory JSON/YAML text. `fmt` forces `"json"`/`"yaml"` instead of autodetecting.
+
+| Method | Signature | Purpose |
+|---|---|---|
+| `parse_packet` | `(state, direction, data: bytes) -> ParsedPacket` | Decode a full frame using the state's `"packet"` type |
+| `serialize_packet` | `(state, direction, name, params: dict) -> bytes` | Encode `{name, params}` back into bytes |
+| `read_named` | `(state, direction, type_name, data: bytes) -> Any` | Decode a standalone named type, bypassing `"packet"` |
+| `write_named` | `(state, direction, type_name, value) -> bytes` | Encode a standalone named type |
+| `read_type` | `(type_def, reader, scope, fields, root=None, parent=None) -> Any` | Low-level recursive read, given a raw type definition |
+| `write_type` | `(type_def, value, writer, scope, fields, root=None, parent=None) -> None` | Low-level recursive write |
+| `get_scope` | `(state, direction) -> Scope` | Look up the `Scope` (local types) for a state/direction |
+
+`ParsedPacket` is a dataclass: `name: str`, `params: dict`, `bytes_read: int` (useful to assert the whole buffer was consumed).
+
+### `Reader` / `Writer` (`io.py`)
+
+```python
+r = Reader(buffer, offset=0)
+r.remaining        # bytes left
+r.ensure(n)         # raises BufferUnderrun if fewer than n bytes remain
+r.read_bytes(n)     # -> bytes, advances offset
+r.peek_byte()       # -> int, does NOT advance offset
+
+w = Writer()
+w.write_bytes(data)
+w.result()          # -> bytes, all chunks concatenated
+len(w)              # total bytes written so far
+```
+
+### `Primitive` (`primitives.py`)
+
+```python
+@dataclass(frozen=True)
+class Primitive:
+    name: str
+    read: Callable[[Reader], Any]
+    write: Callable[[Any, Writer], None]
+    size_of: Callable[[Any], int] | None = None
+```
+
+## Extending the library
+
+Following the project's established convention (see `CHANGELOG.md`): **`core.py` is only ever extended, never rewritten** — new composite handlers get added to `_composite_handlers` / `_composite_write_handlers` and as new methods at the end of the `Protocol` class; internal logic of existing handlers is only ever touched via targeted, surgical edits. A full rewrite previously broke `_resolve_compare` and switch fallback behavior — reverting to the original and only adding on top fixed it.
+
+**To add a new primitive type:** register it in `PRIMITIVES` (`primitives.py`) via `_fixed_size_primitive`, `_int_n_bytes_primitive`, or a hand-written `Primitive(name, read, write, size_of)` — no changes to `core.py` needed, primitives are resolved by name lookup.
+
+**To add a new composite type:**
+1. Write `_read_<name>` / `_write_<name>` methods on `Protocol`.
+2. Register them in `self._composite_handlers` / `self._composite_write_handlers` in `__init__`.
+3. Add the name to `COMPOSITE_TYPE_NAMES` in `loader.py` so the YAML shorthand recognizes it (or pass it via `extra_composite_names` to `load_protocol_dict`).
+
+## Project layout
+
+```
+protolib/
+├── __init__.py       # public exports, __version__
+├── io.py             # Reader, Writer, BufferUnderrun
+├── primitives.py     # PRIMITIVES catalog, Primitive dataclass
+├── core.py           # Protocol engine: composite types, read_type/write_type,
+│                      # parse_packet/serialize_packet
+├── loader.py          # JSON/YAML loading, YAML shorthand <-> protodef translation
+├── framer.py          # PacketFramer (length-prefixed stream framing)
+├── nbt.py             # NBT read/write (named, optional, anonymous variants)
+├── conditions.py       # eval_condition: safe expression evaluator for `condition`
+├── errors.py           # ProtolibError and subclasses
+└── py.typed            # PEP 561 marker (type hints are part of the public API)
+
+examples/
+├── example_protocol.yml   # reference protocol: every composite pattern + all
+│                            # 61 primitives, one field per native
+├── example_protocol.json  # same protocol, plain node-protodef JSON form
+├── demo.py                 # runs example_protocol.yml end-to-end
+└── README.md                # walkthrough of each pattern in example_protocol.yml
+
+tests/                # pytest suite (io, primitives, loader, conditions,
+                       # core composites, NBT, framer, roundtrip against examples/)
+```
+
+## Running the tests
+
+```bash
+pip install -e .[dev]
+pytest
+```
+
+The test suite covers `io.py`, every primitive, the loader (JSON/YAML/shorthand translation), `conditions.py`, all composite handlers in `core.py`, `nbt.py`, `framer.py`, and a full roundtrip test against `examples/example_protocol.yml`/`.json`.
+
+---
+
+## See also
+
+- `examples/README.md` — walks through each pattern (`switch` with `../field`, arrays of containers with an inner switch, parametrizable named types, packed bitfields, and the full native-type catalog) with the exact YAML and expected Python values.
+- `CHANGELOG.md` — full history of additions and bug fixes, including the reasoning behind non-obvious decisions (e.g. why `mapper` keys are normalized, why `entityMetadataLoop` peeks instead of reading the terminator byte separately).
+ 
