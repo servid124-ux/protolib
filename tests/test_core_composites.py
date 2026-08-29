@@ -1,7 +1,12 @@
 import unittest
 
 from protolib.core import Protocol
-from protolib.errors import SwitchCaseNotFound, InvalidTypeDefinition, UnknownTypeError
+from protolib.errors import (
+    SwitchCaseNotFound,
+    InvalidTypeDefinition,
+    UnknownTypeError,
+    MapperValueNotFoundError,
+)
 from protolib.io import BufferUnderrun
 
 
@@ -190,13 +195,18 @@ class TestMapper(unittest.TestCase):
         parsed = self.proto.read_named("play", "toClient", "myType", b"\x01")
         self.assertEqual(parsed, "status")
 
-    def test_unknown_raw_value_passes_through_unmapped(self):
-        # per core.py's own comment: "sin mapping conocido: se devuelve el valor crudo"
-        parsed = self.proto.read_named("play", "toClient", "myType", b"\x05")
-        self.assertEqual(parsed, 5)
+    def test_unknown_raw_value_raises_on_read(self):
+        # 0.3.8: parity with node-protodef (utils.js readMapper), which
+        # throws when the raw value has no entry in mappings instead of
+        # silently passing it through. A mapper models a closed set
+        # (packet state, entity type, block face...), so an unmapped
+        # value is a real protocol desync or a stale table, not
+        # something safe to paper over.
+        with self.assertRaises(MapperValueNotFoundError):
+            self.proto.read_named("play", "toClient", "myType", b"\x05")
 
     def test_unknown_symbolic_name_raises_on_write(self):
-        with self.assertRaises(InvalidTypeDefinition):
+        with self.assertRaises(MapperValueNotFoundError):
             self.proto.write_named("play", "toClient", "myType", "not_a_real_mapping")
 
     def test_int_keyed_mappings_work(self):
@@ -290,6 +300,29 @@ class TestBitflags(unittest.TestCase):
         })
         data = proto.write_named("play", "toClient", "myType", {"air": True, "water": True})
         self.assertEqual(data, b"\x03")
+
+    def test_list_form_big_does_not_reverse_order(self):
+        # 0.3.8 regression test: `big` used to (incorrectly) reverse the
+        # array so bit index N-1-i mapped to flag i -- a divergence from
+        # node-protodef (utils.js readBitflags/writeBitflags), where
+        # `big` only picks BigInt vs Number shifting for the mask, never
+        # the bit each name maps to. "air" must always be bit 0 and
+        # "lava" bit 2, with or without big=True.
+        without_big = make_protocol({"myType": ["bitflags", {"type": "u8", "flags": ["air", "water", "lava"]}]})
+        with_big = make_protocol({
+            "myType": ["bitflags", {"type": "u8", "flags": ["air", "water", "lava"], "big": True}],
+        })
+        raw = bytes([0b00000101])  # bit0 (air) + bit2 (lava)
+        expected = {"air": True, "water": False, "lava": True, "_value": 5}
+        self.assertEqual(without_big.read_named("play", "toClient", "myType", raw), expected)
+        self.assertEqual(with_big.read_named("play", "toClient", "myType", raw), expected)
+        # and the same on write: both must produce identical bytes
+        value = {"air": True, "water": False, "lava": True}
+        self.assertEqual(
+            without_big.write_named("play", "toClient", "myType", value),
+            with_big.write_named("play", "toClient", "myType", value),
+        )
+        self.assertEqual(with_big.write_named("play", "toClient", "myType", value), raw)
 
 
 class TestBuffer(unittest.TestCase):

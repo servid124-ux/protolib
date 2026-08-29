@@ -1,5 +1,128 @@
 # Changelog
 
+## 0.3.8
+
+Auditoría directa contra el código fuente real de `node-protodef`
+1.19.0 (no contra su documentación) para encontrar divergencias de
+comportamiento en los tipos compuestos que ya teníamos portados
+(`mapper`, `bitflags`). `container`/`array`/`switch`/`varint`/`pstring`/
+`buffer`/`bitfield`/`option`/`count` se auditaron también y ya estaban
+a la par o mejor que el original (contexto `push_level` para `../` en
+containers inline, `max_bits` parametrizado en varint en vez de
+32/64/128 hardcodeados, `count` sin default silencioso a `varint`
+donde node-protodef deja un `// TODO: debería lanzar error`) -- no se
+tocó nada ahí.
+
+### Fixed
+- **`mapper` sin match pasaba el valor crudo en silencio en vez de
+  fallar** (`core.py`, `_read_mapper`/`_write_mapper`): al leer, si el
+  valor crudo no tenía entrada en `mappings`, se devolvía tal cual
+  (`return raw`) en lugar de levantar error. Al escribir, si el nombre
+  simbólico no tenía mapeo inverso, se levantaba `InvalidTypeDefinition`
+  -- útil pero no distinguible de un error real de definición de
+  protocolo. `node-protodef` (`utils.js: readMapper`/`writeMapper`)
+  lanza en ambos casos (`throw new Error(value + ' is not in the
+  mappings value')`), porque un `mapper` modela un conjunto cerrado
+  (estado del paquete, tipo de entidad, cara de bloque...) y un valor
+  sin mapear casi siempre es un desync real del stream o una tabla de
+  mappings desactualizada, no algo seguro de ignorar. Nueva excepción
+  dedicada `MapperValueNotFoundError` (antes de esto sólo existía
+  `SwitchCaseNotFound` para el caso análogo de `switch`) usada en
+  ambas direcciones. **Breaking change** si algún protocolo dependía
+  del passthrough silencioso al leer.
+- **`bitflags` con `flags` como lista invertía el orden si `big:
+  true`** (`core.py`, `_read_bitflags`/`_write_bitflags`): la forma
+  posicional (`flags: ["air", "water", "lava"]`) usaba
+  `reversed(flag_names)` cuando `big=True`, asignando el bit `N-1-i`
+  al flag `i` en vez de `i`. En `node-protodef`
+  (`utils.js: readBitflags`/`writeBitflags`) real, `big` sólo decide
+  si la máscara se calcula con `BigInt` (`1n << BigInt(k)`) o `Number`
+  (`1 << k`) -- nunca cambia qué bit le corresponde a qué nombre; el
+  orden siempre es el índice tal cual en la lista. Como Python no
+  necesita esa distinción (los `int` ya son de precisión arbitraria),
+  `big` ahora es un no-op para la forma en lista: se sigue aceptando
+  en el schema (para no romper protocolos que ya lo declaraban) pero
+  ya no altera el resultado. **Breaking change** si algún protocolo
+  con `"big": true` sobre `flags` en forma de lista dependía del orden
+  invertido (el caso con `flags` como dict + `shift` no se ve
+  afectado, nunca tuvo este bug).
+
+### Tests
+- `test_core_composites.py::TestMapper`: los dos tests que fijaban el
+  comportamiento viejo (`test_unknown_raw_value_passes_through_unmapped`,
+  `test_unknown_symbolic_name_raises_on_write` esperando
+  `InvalidTypeDefinition`) se reescribieron para esperar
+  `MapperValueNotFoundError` en ambas direcciones.
+- `test_core_composites.py::TestBitflags::test_list_form_big_does_not_reverse_order`
+  (nuevo): fija que `"air"` siempre es el bit 0 y `"lava"` el bit 2,
+  con y sin `"big": True`, tanto en lectura como en escritura --
+  regresión directa del bug de arriba, que no tenía ningún test
+  cubriéndolo (por eso pasó desapercibido).
+- 153/157 tests pasan; los 4 restantes (`test_examples_roundtrip.py`)
+  fallan por `examples/example_protocol.json` y
+  `examples/classicube_protocol.yml` ausentes del entorno de
+  desarrollo usado para este audit, no por código -- no relacionado
+  con este release.
+
+## 0.3.7
+
+### Fixed
+- **Un `container` inline resuelto por un `switch` "roba" el nivel
+  `parent`** (`core.py`, `_read_switch`/`_write_switch`): cuando
+  `switch.fields` resuelve a un `container` inline (`["container",
+  [...]]`, literal ahí mismo, no un tipo nombrado), se despachaba con
+  `read_type`/`write_type` normal -> `push_level=True` por default,
+  igual que cualquier container común. Eso convertía ese container en
+  su propio `child_parent`, así que un `../algo` dentro de él subía
+  solo hasta el switch mismo en vez de hasta el container que
+  contiene al campo del switch -- el mismo problema que ya estaba
+  identificado y resuelto para un container usado como item inline de
+  un `array` (ver `_read_array_item`/`_write_array_item` y el
+  comentario en `_read_container` sobre por qué ahí se usa
+  `push_level=False`), pero nunca se había aplicado al caso análogo
+  de `switch`. Encontrado diseccionando a mano un `declare_commands`
+  real de un server 1.16.5 (Aternos): el campo `suggestionType` de un
+  `command_node` con `has_custom_suggestions=1` depende de
+  `../flags/has_custom_suggestions`, y ese `../` resolvía contra el
+  container `extraNodeData` (salido del switch) en lugar de contra el
+  `command_node` real -- `compare_val` salía `None`, caía al
+  `default: "void"`, y el parseo se desalineaba 21 bytes (el tamaño
+  de la string `suggestionType` no leída), reventando 3 nodos
+  después con `buffer exhausted`. Fix: mismo patrón que
+  `_read_array_item` -- si `case_type` es un container inline, se
+  despacha con `push_level=False`, transparente a `../`. Validado con
+  el paquete real de 328 bytes (20 nodos): parsea completo y
+  re-serializa byte-a-byte idéntico al original capturado del server.
+
+## 0.3.6
+
+### Fixed
+- **`switch` sobre un campo `bool` nunca matchea** (`core.py`,
+  `_resolve_switch_case`): `str(True)` da `"True"` en Python, pero
+  minecraft-data (formato node-protodef/JSON) siempre usa
+  `"true"`/`"false"` en minúscula como keys del switch. Nunca
+  matcheaba para ningún protocolo real con switch sobre bool.
+  Afectaba `slot`/`present` (item slots 1.13+), `packet_map_chunk`/
+  `groundUp` (chunk data 1.15+), `packet_face_player`/`isEntity`
+  (1.13+) -- 16 de 29 `protocol.json` en el rango 1.7-1.16.5. Fix:
+  chequear `isinstance(compare_val, bool)` ANTES que cualquier otro
+  caso (en Python `bool` es subclase de `int`, así que el orden
+  importa) y mapear a `"true"`/`"false"` literal.
+- **`compareTo` con `/` en medio del path nunca se resuelve**
+  (`core.py`, `_resolve_compare_value`): un `compareTo` relativo con
+  `/` en medio (ej. `"flags/kind"`, sin `/` ni `../` al inicio --
+  típico para indexar un sub-campo de un `bitfield` hermano) nunca
+  llegaba a `resolve_field_path` (que sí sabe recorrer paths con `/`).
+  Caía al `eval_condition(...)` dentro de un `try/except` que se
+  tragaba el error en silencio y devolvía `None`. Rompía cualquier
+  protocolo con un switch dependiente de un sub-campo de bitfield
+  hermano -- ejemplo real: `declared_command_node` en el protocolo de
+  comandos (`/help`, tab-complete) de 1.13+. Fix: cualquier
+  `compareTo` que contenga `/` (no solo al inicio) ahora pasa por
+  `resolve_field_path`. El check `compare_to in fields` se mantiene
+  antes, por si algún protocolo tuviera un nombre de campo literal
+  con `/` en vez de usarlo como separador de path.
+
 ### Added
 - **`utf16be64`** (`primitives.py`): instancia lista para usar por nombre
   desde `protocol.yml`/`.json` (`type: utf16be64`) de la fábrica

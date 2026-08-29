@@ -42,6 +42,7 @@ from .errors import (
     UnknownTypeError,
     InvalidTypeDefinition,
     SwitchCaseNotFound,
+    MapperValueNotFoundError,
 )
 from .loader import load_protocol_dict
 
@@ -430,13 +431,34 @@ class Protocol:
         # "../" and "/", so we use it first for those cases.
         if compare_to.startswith("../") or compare_to.startswith("/"):
             return resolve_field_path(compare_to, fields, root, parent)
+        # A relative path with "/" in the middle (e.g. "flags/kind", no
+        # leading "/" or "../") is typical for indexing a sub-field of an
+        # already-read/written sibling bitfield. The "compare_to in fields"
+        # check above only matches the literal key, so this never reached
+        # resolve_field_path (which does know how to walk it) and instead
+        # fell through to eval_condition inside the try/except below, which
+        # silently swallowed the failure and returned None. We check "in
+        # fields" first on purpose, in case some protocol has a literal
+        # field name containing "/" rather than using it as a path separator.
+        if "/" in compare_to:
+            return resolve_field_path(compare_to, fields, root, parent)
         try:
             return eval_condition(compare_to, fields, root, parent)
         except Exception:
             return None
 
     def _resolve_switch_case(self, opts: dict, compare_val: Any, root) -> TypeDef | None:
-        case_key = str(compare_val) if not isinstance(compare_val, str) else compare_val
+        # bool must be checked before str/other, since in Python bool is a
+        # subclass of int (isinstance(True, int) == True) -- and minecraft-data
+        # (node-protodef / JSON) always uses lowercase "true"/"false" as switch
+        # keys (the JSON literal, not Python's str(True) == "True"). Without
+        # this, a switch on a bool field never matches (SwitchCaseNotFound).
+        if isinstance(compare_val, bool):
+            case_key = "true" if compare_val else "false"
+        elif isinstance(compare_val, str):
+            case_key = compare_val
+        else:
+            case_key = str(compare_val)
         case_type = opts["fields"].get(case_key, opts["fields"].get(compare_val))
         if case_type is not None:
             return case_type
@@ -461,8 +483,18 @@ class Protocol:
         case_type = self._resolve_switch_case(opts, compare_val, root)
         if case_type is None:
             if "default" in opts:
-                return self.read_type(opts["default"], r, scope, fields, root, parent)
-            raise SwitchCaseNotFound(self._identify_compare_ref(opts), compare_val)
+                case_type = opts["default"]
+            else:
+                raise SwitchCaseNotFound(self._identify_compare_ref(opts), compare_val)
+        # An inline container (["container", opts], literal inside
+        # switch.fields -- not a named type) must not push its own
+        # parent level: same reasoning as _read_array_item (see the
+        # comment there and in _read_container). Conceptually the
+        # switch's chosen shape is "part of" the same level as the
+        # field holding the switch, not a new sub-level, so "../"
+        # inside it must skip past it.
+        if isinstance(case_type, list) and len(case_type) == 2 and case_type[0] == "container":
+            return self._read_container(case_type[1], r, scope, fields, root, parent, push_level=False)
         return self.read_type(case_type, r, scope, fields, root, parent)
 
     def _write_switch(self, opts: dict, value: Any, w: Writer, scope: Scope,
@@ -471,8 +503,13 @@ class Protocol:
         case_type = self._resolve_switch_case(opts, compare_val, root)
         if case_type is None:
             if "default" in opts:
-                return self.write_type(opts["default"], value, w, scope, fields, root, parent)
-            raise SwitchCaseNotFound(self._identify_compare_ref(opts), compare_val)
+                case_type = opts["default"]
+            else:
+                raise SwitchCaseNotFound(self._identify_compare_ref(opts), compare_val)
+        # Mirror of _read_switch above -- see that comment.
+        if isinstance(case_type, list) and len(case_type) == 2 and case_type[0] == "container":
+            self._write_container(case_type[1], value, w, scope, fields, root, parent, push_level=False)
+            return
         return self.write_type(case_type, value, w, scope, fields, root, parent)
 
     # ---- mapper (integer <-> symbolic name) --------------------------------
@@ -514,7 +551,12 @@ class Protocol:
         for key, mapped_name in mappings.items():
             if self._normalize_mapper_key(key) == raw:
                 return mapped_name
-        return raw  # no known mapping: return the raw value
+        # Parity with node-protodef (utils.js readMapper): an
+        # unmapped value is an error, not a silent passthrough -- a
+        # mapper models a closed set (entity type, block face, chat
+        # position...), so a raw value with no entry usually means the
+        # mapping table is stale or the stream desynced upstream.
+        raise MapperValueNotFoundError(raw, mappings, writing=False)
 
     def _write_mapper(self, opts: dict, value: Any, w: Writer, scope: Scope,
                         fields: dict, root, parent) -> None:
@@ -526,9 +568,7 @@ class Protocol:
                     numeric = self._normalize_mapper_key(k)
                     break
             if numeric is None:
-                raise InvalidTypeDefinition(
-                    f"mapper: no inverse mapping found for {value!r}"
-                )
+                raise MapperValueNotFoundError(value, mappings, writing=True)
         else:
             numeric = value
         self.write_type(opts["type"], numeric, w, scope, fields, root, parent)
@@ -611,13 +651,19 @@ class Protocol:
             result["_value"] = raw
             return result
 
-        # flags as a positional list (each occupies 1 bit, LSB first,
-        # or MSB first if big=True) -- parity with the official spec.
+        # flags as a positional list: each entry occupies bit `i` (its
+        # own index), always LSB-first. Fixed in 0.3.8 -- this used to
+        # reverse the list when `big=True`, but that doesn't match
+        # node-protodef (utils.js readBitflags): there, `big` only
+        # picks BigInt vs Number shifting for the mask (1n << BigInt(k)
+        # vs 1 << k), it never changes which bit index a name maps to.
+        # Since Python ints don't need that distinction, `big` is now a
+        # no-op here for arrays -- kept accepted (not rejected) so
+        # existing protocol.json/yml files that set it don't break, but
+        # it no longer alters behavior.
         flag_names: list[str] = flags_def
-        big_endian = opts.get("big", False)
         result: dict[str, Any] = {}
-        names = list(reversed(flag_names)) if big_endian else flag_names
-        for i, flag_name in enumerate(names):
+        for i, flag_name in enumerate(flag_names):
             if flag_name is None:
                 continue
             result[flag_name] = bool((raw >> i) & 1)
@@ -646,11 +692,14 @@ class Protocol:
             self.write_type(opts["type"], raw, w, scope, fields, root, parent)
             return
 
+        # See the matching comment in _read_bitflags: `big` no longer
+        # reverses the array order here either, for the same reason --
+        # that reversal never existed in node-protodef, it was a
+        # divergence in this port. Bit index is always the flag's own
+        # position in the list.
         flag_names: list[str] = flags_def
-        big_endian = opts.get("big", False)
-        names = list(reversed(flag_names)) if big_endian else flag_names
         raw = 0
-        for i, flag_name in enumerate(names):
+        for i, flag_name in enumerate(flag_names):
             if flag_name is None:
                 continue
             if flag_values.get(flag_name):

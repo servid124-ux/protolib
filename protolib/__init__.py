@@ -81,4 +81,4 @@ __all__ = [
     "write_anon_optional_nbt",
 ]
 
-__version__ = "0.3.5"
+__version__ = "0.3.9"
