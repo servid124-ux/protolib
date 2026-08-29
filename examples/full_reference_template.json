@@ -1,80 +1,402 @@
 {
   "types": {
-    "u8": "native",
     "i8": "native",
-    "u16": "native",
+    "u8": "native",
     "i16": "native",
-    "u32": "native",
+    "u16": "native",
     "i32": "native",
-    "u64": "native",
+    "u32": "native",
     "i64": "native",
+    "u64": "native",
+    "f16": "native",
     "f32": "native",
     "f64": "native",
-    "varint": "native",
-    "uvarint": "native",
+    "li8": "native",
+    "lu8": "native",
+    "li16": "native",
+    "lu16": "native",
+    "li32": "native",
+    "lu32": "native",
+    "li64": "native",
+    "lu64": "native",
+    "lf16": "native",
+    "lf32": "native",
+    "lf64": "native",
+    "u24": "native",
+    "i24": "native",
+    "u40": "native",
+    "i40": "native",
+    "u48": "native",
+    "i48": "native",
+    "u56": "native",
+    "i56": "native",
+    "lu24": "native",
+    "li24": "native",
+    "lu40": "native",
+    "li40": "native",
+    "lu48": "native",
+    "li48": "native",
+    "lu56": "native",
+    "li56": "native",
     "bool": "native",
-    "restBuffer": "native",
+    "void": "native",
+    "varint": "native",
+    "varlong": "native",
+    "uvarint": "native",
+    "uvarlong": "native",
+    "zigzag32": "native",
+    "zigzag64": "native",
+    "varint128": "native",
+    "uvarint128": "native",
+    "cstring": "native",
     "UUID": "native",
+    "restBuffer": "native",
     "nbt": "native",
-
+    "optionalNbt": "native",
+    "anonymousNbt": "native",
+    "anonOptionalNbt": "native",
+    "string64": "native",
+    "utf16be64": "native",
+    "buffer1024": "native",
+    "buffer64": "native",
+    "fixedCoord": "native",
+    "fixedCoordDelta": "native",
     "string": [
       "pstring",
-      { "countType": "varint" }
+      {
+        "countType": "varint"
+      }
     ],
-
     "vec3i16": [
       "container",
       [
-        { "name": "x", "type": "i16" },
-        { "name": "y", "type": "i16" },
-        { "name": "z", "type": "i16" }
+        {
+          "name": "x",
+          "type": "i16"
+        },
+        {
+          "name": "y",
+          "type": "i16"
+        },
+        {
+          "name": "z",
+          "type": "i16"
+        }
       ]
     ]
   },
-
   "play": {
-
     "toServer": {
       "types": {
-
+        "packet_ejemplo_natives": [
+          "container",
+          [
+            {
+              "name": "campo_u8",
+              "type": "u8"
+            },
+            {
+              "name": "campo_i8",
+              "type": "i8"
+            },
+            {
+              "name": "campo_u16",
+              "type": "u16"
+            },
+            {
+              "name": "campo_i16",
+              "type": "i16"
+            },
+            {
+              "name": "campo_u24",
+              "type": "u24"
+            },
+            {
+              "name": "campo_i24",
+              "type": "i24"
+            },
+            {
+              "name": "campo_u32",
+              "type": "u32"
+            },
+            {
+              "name": "campo_i32",
+              "type": "i32"
+            },
+            {
+              "name": "campo_u40",
+              "type": "u40"
+            },
+            {
+              "name": "campo_i40",
+              "type": "i40"
+            },
+            {
+              "name": "campo_u48",
+              "type": "u48"
+            },
+            {
+              "name": "campo_i48",
+              "type": "i48"
+            },
+            {
+              "name": "campo_u56",
+              "type": "u56"
+            },
+            {
+              "name": "campo_i56",
+              "type": "i56"
+            },
+            {
+              "name": "campo_u64",
+              "type": "u64"
+            },
+            {
+              "name": "campo_i64",
+              "type": "i64"
+            },
+            {
+              "name": "campo_f16",
+              "type": "f16"
+            },
+            {
+              "name": "campo_f32",
+              "type": "f32"
+            },
+            {
+              "name": "campo_f64",
+              "type": "f64"
+            },
+            {
+              "name": "campo_lu8",
+              "type": "lu8"
+            },
+            {
+              "name": "campo_li8",
+              "type": "li8"
+            },
+            {
+              "name": "campo_lu16",
+              "type": "lu16"
+            },
+            {
+              "name": "campo_li16",
+              "type": "li16"
+            },
+            {
+              "name": "campo_lu24",
+              "type": "lu24"
+            },
+            {
+              "name": "campo_li24",
+              "type": "li24"
+            },
+            {
+              "name": "campo_lu32",
+              "type": "lu32"
+            },
+            {
+              "name": "campo_li32",
+              "type": "li32"
+            },
+            {
+              "name": "campo_lu40",
+              "type": "lu40"
+            },
+            {
+              "name": "campo_li40",
+              "type": "li40"
+            },
+            {
+              "name": "campo_lu48",
+              "type": "lu48"
+            },
+            {
+              "name": "campo_li48",
+              "type": "li48"
+            },
+            {
+              "name": "campo_lu56",
+              "type": "lu56"
+            },
+            {
+              "name": "campo_li56",
+              "type": "li56"
+            },
+            {
+              "name": "campo_lu64",
+              "type": "lu64"
+            },
+            {
+              "name": "campo_li64",
+              "type": "li64"
+            },
+            {
+              "name": "campo_lf16",
+              "type": "lf16"
+            },
+            {
+              "name": "campo_lf32",
+              "type": "lf32"
+            },
+            {
+              "name": "campo_lf64",
+              "type": "lf64"
+            },
+            {
+              "name": "campo_varint",
+              "type": "varint"
+            },
+            {
+              "name": "campo_varlong",
+              "type": "varlong"
+            },
+            {
+              "name": "campo_uvarint",
+              "type": "uvarint"
+            },
+            {
+              "name": "campo_uvarlong",
+              "type": "uvarlong"
+            },
+            {
+              "name": "campo_varint128",
+              "type": "varint128"
+            },
+            {
+              "name": "campo_uvarint128",
+              "type": "uvarint128"
+            },
+            {
+              "name": "campo_zigzag32",
+              "type": "zigzag32"
+            },
+            {
+              "name": "campo_zigzag64",
+              "type": "zigzag64"
+            },
+            {
+              "name": "campo_bool",
+              "type": "bool"
+            },
+            {
+              "name": "campo_void",
+              "type": "void"
+            },
+            {
+              "name": "campo_cstring",
+              "type": "cstring"
+            },
+            {
+              "name": "campo_string64",
+              "type": "string64"
+            },
+            {
+              "name": "campo_utf16be64",
+              "type": "utf16be64"
+            },
+            {
+              "name": "campo_uuid",
+              "type": "UUID"
+            },
+            {
+              "name": "campo_nbt",
+              "type": "nbt"
+            },
+            {
+              "name": "campo_optionalNbt",
+              "type": "optionalNbt"
+            },
+            {
+              "name": "campo_anonymousNbt",
+              "type": "anonymousNbt"
+            },
+            {
+              "name": "campo_anonOptionalNbt",
+              "type": "anonOptionalNbt"
+            },
+            {
+              "name": "campo_buffer64",
+              "type": "buffer64"
+            },
+            {
+              "name": "campo_buffer1024",
+              "type": "buffer1024"
+            },
+            {
+              "name": "campo_fixedCoord",
+              "type": "fixedCoord"
+            },
+            {
+              "name": "campo_fixedCoordDelta",
+              "type": "fixedCoordDelta"
+            },
+            {
+              "name": "campo_restBuffer",
+              "type": "restBuffer"
+            }
+          ]
+        ],
         "packet_ejemplo_container": [
           "container",
           [
-            { "name": "campo_simple", "type": "u8" },
-            { "name": "campo_con_signo", "type": "i16" },
-            { "name": "texto", "type": "string" },
-            { "name": "posicion", "type": "vec3i16" }
+            {
+              "name": "campo_simple",
+              "type": "u8"
+            },
+            {
+              "name": "campo_con_signo",
+              "type": "i16"
+            },
+            {
+              "name": "texto",
+              "type": "string"
+            },
+            {
+              "name": "posicion",
+              "type": "vec3i16"
+            }
           ]
         ],
-
         "packet_ejemplo_array": [
           "container",
           [
-            { "name": "cantidad", "type": "u8" },
+            {
+              "name": "cantidad",
+              "type": "u8"
+            },
             {
               "name": "lista_tamano_fijo",
               "type": [
                 "array",
-                { "count": 3, "type": "u8" }
+                {
+                  "count": 3,
+                  "type": "u8"
+                }
               ]
             },
             {
               "name": "lista_tamano_prefijado",
               "type": [
                 "array",
-                { "countType": "u8", "type": "vec3i16" }
+                {
+                  "countType": "u8",
+                  "type": "vec3i16"
+                }
               ]
             },
             {
               "name": "lista_referida",
               "type": [
                 "array",
-                { "count": "cantidad", "type": "string" }
+                {
+                  "count": "cantidad",
+                  "type": "string"
+                }
               ]
             }
           ]
         ],
-
         "packet_ejemplo_count": [
           "container",
           [
@@ -82,19 +404,23 @@
               "name": "longitud_de_datos",
               "type": [
                 "count",
-                { "type": "u8", "countFor": "datos" }
+                {
+                  "type": "u8",
+                  "countFor": "datos"
+                }
               ]
             },
             {
               "name": "datos",
               "type": [
                 "buffer",
-                { "count": "longitud_de_datos" }
+                {
+                  "count": "longitud_de_datos"
+                }
               ]
             }
           ]
         ],
-
         "packet_ejemplo_buffer": [
           "container",
           [
@@ -102,26 +428,31 @@
               "name": "datos_tamano_fijo",
               "type": [
                 "buffer",
-                { "count": 16 }
+                {
+                  "count": 16
+                }
               ]
             },
             {
               "name": "datos_prefijados",
               "type": [
                 "buffer",
-                { "countType": "u16" }
+                {
+                  "countType": "u16"
+                }
               ]
             },
             {
               "name": "datos_resto",
               "type": [
                 "buffer",
-                { "rest": true }
+                {
+                  "rest": true
+                }
               ]
             }
           ]
         ],
-
         "packet_ejemplo_pstring": [
           "container",
           [
@@ -129,19 +460,23 @@
               "name": "texto_varint",
               "type": [
                 "pstring",
-                { "countType": "varint" }
+                {
+                  "countType": "varint"
+                }
               ]
             },
             {
               "name": "texto_u8",
               "type": [
                 "pstring",
-                { "countType": "u8", "encoding": "utf-8" }
+                {
+                  "countType": "u8",
+                  "encoding": "utf-8"
+                }
               ]
             }
           ]
         ],
-
         "packet_ejemplo_option": [
           "container",
           [
@@ -154,7 +489,6 @@
             }
           ]
         ],
-
         "packet_ejemplo_bitfield": [
           "container",
           [
@@ -163,15 +497,26 @@
               "type": [
                 "bitfield",
                 [
-                  { "name": "modo", "size": 3, "signed": false },
-                  { "name": "activo", "size": 1, "signed": false },
-                  { "name": "prioridad", "size": 4, "signed": true }
+                  {
+                    "name": "modo",
+                    "size": 3,
+                    "signed": false
+                  },
+                  {
+                    "name": "activo",
+                    "size": 1,
+                    "signed": false
+                  },
+                  {
+                    "name": "prioridad",
+                    "size": 4,
+                    "signed": true
+                  }
                 ]
               ]
             }
           ]
         ],
-
         "packet_ejemplo_bitflags": [
           "container",
           [
@@ -192,11 +537,13 @@
             }
           ]
         ],
-
         "packet_ejemplo_switch_directo": [
           "container",
           [
-            { "name": "tipo_de_dato", "type": "u8" },
+            {
+              "name": "tipo_de_dato",
+              "type": "u8"
+            },
             {
               "name": "valor",
               "type": [
@@ -214,7 +561,6 @@
             }
           ]
         ],
-
         "packet": [
           "container",
           [
@@ -225,15 +571,16 @@
                 {
                   "type": "u8",
                   "mappings": {
-                    "0x00": "ejemplo_container",
-                    "0x01": "ejemplo_array",
-                    "0x02": "ejemplo_count",
-                    "0x03": "ejemplo_buffer",
-                    "0x04": "ejemplo_pstring",
-                    "0x05": "ejemplo_option",
-                    "0x06": "ejemplo_bitfield",
-                    "0x07": "ejemplo_bitflags",
-                    "0x08": "ejemplo_switch_directo"
+                    "0x00": "ejemplo_natives",
+                    "0x01": "ejemplo_container",
+                    "0x02": "ejemplo_array",
+                    "0x03": "ejemplo_count",
+                    "0x04": "ejemplo_buffer",
+                    "0x05": "ejemplo_pstring",
+                    "0x06": "ejemplo_option",
+                    "0x07": "ejemplo_bitfield",
+                    "0x08": "ejemplo_bitflags",
+                    "0x09": "ejemplo_switch_directo"
                   }
                 }
               ]
@@ -245,6 +592,7 @@
                 {
                   "compareTo": "name",
                   "fields": {
+                    "ejemplo_natives": "packet_ejemplo_natives",
                     "ejemplo_container": "packet_ejemplo_container",
                     "ejemplo_array": "packet_ejemplo_array",
                     "ejemplo_count": "packet_ejemplo_count",
@@ -260,35 +608,43 @@
             }
           ]
         ]
-
       }
     },
-
     "toClient": {
       "types": {
-
         "packet_ejemplo_anon": [
           "container",
           [
-            { "name": "id", "type": "u8" },
+            {
+              "name": "id",
+              "type": "u8"
+            },
             {
               "name": "datos_anonimos",
               "anon": true,
               "type": [
                 "container",
                 [
-                  { "name": "x", "type": "i16" },
-                  { "name": "y", "type": "i16" }
+                  {
+                    "name": "x",
+                    "type": "i16"
+                  },
+                  {
+                    "name": "y",
+                    "type": "i16"
+                  }
                 ]
               ]
             }
           ]
         ],
-
         "packet_ejemplo_condition": [
           "container",
           [
-            { "name": "tiene_extra", "type": "bool" },
+            {
+              "name": "tiene_extra",
+              "type": "bool"
+            },
             {
               "name": "campo_extra",
               "condition": "fields.tiene_extra === true",
@@ -296,11 +652,13 @@
             }
           ]
         ],
-
         "packet_ejemplo_array_de_containers": [
           "container",
           [
-            { "name": "cantidad", "type": "u8" },
+            {
+              "name": "cantidad",
+              "type": "u8"
+            },
             {
               "name": "entidades",
               "type": [
@@ -310,8 +668,14 @@
                   "type": [
                     "container",
                     [
-                      { "name": "entidad_id", "type": "u8" },
-                      { "name": "tipo", "type": "u8" },
+                      {
+                        "name": "entidad_id",
+                        "type": "u8"
+                      },
+                      {
+                        "name": "tipo",
+                        "type": "u8"
+                      },
                       {
                         "name": "datos",
                         "type": [
@@ -332,7 +696,6 @@
             }
           ]
         ],
-
         "packet_ejemplo_switch_raiz": [
           "container",
           [
@@ -351,12 +714,10 @@
             }
           ]
         ],
-
         "packet_vacio": [
           "container",
           []
         ],
-
         "packet": [
           "container",
           [
@@ -394,9 +755,7 @@
             }
           ]
         ]
-
       }
     }
-
   }
 }
