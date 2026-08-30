@@ -1,5 +1,8 @@
 # protolib (Python)
 
+
+pip install protolib
+
 A from-scratch, pure-Python implementation of a
 [node-protodef](https://github.com/ProtoDef-io/ProtoDef)-style system:
 you describe the shape of **any** binary protocol's packets in a
