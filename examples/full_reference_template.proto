@@ -1,0 +1,155 @@
+// =============================================================================
+// full_reference_template.proto
+// Exhaustive catalog of everything protolib.protobuf understands: all 15
+// scalar wire types, `repeated` (packed and non-packed), `map<K, V>`,
+// `oneof`, nested `message`/`enum`, cross-references between messages,
+// a recursive type, and `reserved`. See README.md section 14 for the
+// prose explanation of each pattern.
+//
+// This is the .proto-language counterpart to full_reference_template.yml
+// / .json (protolib's OTHER schema language, the generic node-protodef-
+// style engine) -- the three files are NOT equivalent to each other
+// (protobuf and the YAML/JSON engine are fully independent schema
+// languages with their own wire formats), each is simply the complete
+// reference for its own engine.
+//
+// Validated end-to-end (parse -> schema -> encode -> decode roundtrip)
+// in examples/demo_protobuf.py.
+// =============================================================================
+
+syntax = "proto3";
+
+package reference;
+
+// -----------------------------------------------------------------------
+// CATALOG: all 15 scalar types, one per field. Doesn't represent any
+// real message from any real protocol -- purely for reference, to see
+// the exact name of each scalar and its wire behavior in one place.
+// -----------------------------------------------------------------------
+message ScalarCatalog {
+  // -- variable-length integers (VARINT wire type) --
+  int32 campo_int32 = 1;      // varint; a NEGATIVE value still costs 10 bytes
+                               // on the wire (sign-extended to 64 bits) -- use
+                               // sint32 instead if negatives are common
+  int64 campo_int64 = 2;      // same deal as int32, 64-bit range
+  uint32 campo_uint32 = 3;    // varint, 0 to 4294967295
+  uint64 campo_uint64 = 4;    // varint, 0 to 18446744073709551615
+  sint32 campo_sint32 = 5;    // ZIGZAG varint -- compact for negatives,
+                               // prefer this over int32 when values are
+                               // often negative (e.g. deltas/offsets)
+  sint64 campo_sint64 = 6;    // zigzag, 64-bit range
+  bool campo_bool = 7;        // varint 0/1 on write; ANY nonzero varint
+                               // reads back as true per spec
+
+  // -- fixed-width, always little-endian on the wire --
+  fixed32 campo_fixed32 = 8;    // 4 bytes LE, unsigned -- more compact than
+                                 // uint32 on the wire ONLY for large values
+                                 // (uint32 varint costs 5 bytes above 2^28)
+  sfixed32 campo_sfixed32 = 9;  // 4 bytes LE, signed two's complement
+  float campo_float = 10;       // 4 bytes LE, IEEE 754 single precision
+  fixed64 campo_fixed64 = 11;   // 8 bytes LE, unsigned
+  sfixed64 campo_sfixed64 = 12; // 8 bytes LE, signed two's complement
+  double campo_double = 13;     // 8 bytes LE, IEEE 754 double precision
+
+  // -- length-delimited --
+  string campo_string = 14;   // UTF-8 text; decoding invalid UTF-8 raises
+                               // ProtobufDecodeError rather than silently
+                               // replacing/dropping bytes
+  bytes campo_bytes = 15;     // arbitrary binary, no encoding assumed
+}
+
+// -----------------------------------------------------------------------
+// `repeated` of a scalar type -- these get PACKED encoding by default
+// (all values concatenated into one LEN block instead of one tag per
+// element). The decoder also accepts the non-packed wire form for the
+// same field, for interop with encoders that don't pack.
+// -----------------------------------------------------------------------
+message RepeatedScalars {
+  repeated int32 numbers = 1;     // packed
+  repeated double measurements = 2;  // packed
+  repeated string tags = 3;       // NEVER packed: string/bytes always get
+                                   // one tag+LEN per element, regardless
+                                   // of how many there are
+}
+
+// -----------------------------------------------------------------------
+// Nested `message` and nested `enum`, referenced from a `repeated`
+// field of the enclosing message -- the classic pattern for "a record
+// with a repeated sub-structure" (an address book, an inventory, a
+// player's equipped items, ...).
+// -----------------------------------------------------------------------
+message Person {
+  string name = 1;
+  int32 id = 2;
+  string email = 3;
+
+  enum PhoneType {
+    MOBILE = 0;  // proto3 REQUIRES the first enum value's number to be 0:
+                 // it's the implicit default when the field is unset
+    HOME = 1;
+    WORK = 2;
+  }
+
+  message PhoneNumber {
+    string number = 1;
+    PhoneType type = 2;
+  }
+
+  // repeated message: never packed -- one tag+LEN per PhoneNumber
+  repeated PhoneNumber phones = 4;
+}
+
+// Cross-reference to a message declared ABOVE in the same file.
+// (Declaration order never matters -- a forward reference to a message
+// declared LATER in the file works exactly the same way.)
+message AddressBook {
+  repeated Person people = 1;
+}
+
+// -----------------------------------------------------------------------
+// `map<K, V>` -- wire-identical to a repeated synthetic message with
+// `key = 1; value = 2;` fields, which is exactly how protoc itself
+// desugars it. Map keys must be a scalar type per the protobuf spec
+// (never a message or another map).
+// -----------------------------------------------------------------------
+message Inventory {
+  map<string, int32> item_counts = 1;
+}
+
+// -----------------------------------------------------------------------
+// `oneof` -- at most ONE of its member fields may be set at a time.
+// Encoding a value dict with more than one member present raises
+// ProtoOneofViolationError instead of silently writing both.
+// -----------------------------------------------------------------------
+message Event {
+  oneof payload {
+    string text_message = 1;
+    int32 status_code = 2;
+    Person joined = 3;   // a oneof member can be a message type too
+  }
+}
+
+// -----------------------------------------------------------------------
+// A RECURSIVE message: valid and common in protobuf (unlike a fixed-
+// size C struct, LEN-delimited encoding makes self-reference natural)
+// -- a tree, a linked list, a nested comment thread, etc.
+// -----------------------------------------------------------------------
+message TreeNode {
+  string value = 1;
+  repeated TreeNode children = 2;
+}
+
+// -----------------------------------------------------------------------
+// `reserved` -- marks field numbers (and/or names) as permanently
+// unavailable, typically after removing a field from a message that's
+// already been deployed, so a NEW field can never accidentally reuse a
+// number an old binary might still interpret under the old meaning.
+// -----------------------------------------------------------------------
+message VersionedRecord {
+  reserved 2, 4 to 6;   // numbers 2, 4, 5, 6 can never be (re)used below
+  reserved "legacy_id"; // this name can never be reused either
+
+  string current_id = 1;
+  int32 revision = 3;
+  int32 checksum = 7;
+}
